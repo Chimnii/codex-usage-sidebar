@@ -1,10 +1,39 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
+using System.Text;
 
 namespace UsageSidebar {
     [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
     internal class ShellLink { }
+    // Explicit Unicode shell API; independent of WScript.Shell's automation setters.
+    // https://learn.microsoft.com/windows/win32/api/shobjidl_core/nn-shobjidl_core-ishelllinkw
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellLinkW {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, IntPtr data, uint flags);
+        void GetIDList(out IntPtr list);
+        void SetIDList(IntPtr list);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int size);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetHotkey(out ushort key);
+        void SetHotkey(ushort key);
+        void GetShowCmd(out int command);
+        void SetShowCmd(int command);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int size, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr window, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
+    public sealed class ShortcutInfo {
+        public string TargetPath;
+        public string Arguments;
+        public string WorkingDirectory;
+    }
     [StructLayout(LayoutKind.Sequential)]
     internal struct PropertyKey {
         public Guid format;
@@ -32,6 +61,30 @@ namespace UsageSidebar {
             PropertyKey key = new PropertyKey(id);
             PropVariant value = new PropVariant { type = 31, value = Marshal.StringToCoTaskMemUni(text) };
             try { store.SetValue(ref key, ref value); } finally { PropVariantClear(ref value); }
+        }
+        public static void Create(string linkPath, string executable, string workingDirectory) {
+            object link = new ShellLink();
+            try {
+                IShellLinkW target = (IShellLinkW)link;
+                target.SetPath(executable);
+                target.SetArguments("");
+                target.SetWorkingDirectory(workingDirectory);
+                target.SetIconLocation(executable, 0);
+                target.SetDescription("Codex Usage Sidebar");
+                ((IPersistFile)link).Save(linkPath, true);
+            } finally { Marshal.FinalReleaseComObject(link); }
+        }
+        public static ShortcutInfo Read(string linkPath) {
+            object link = new ShellLink();
+            try {
+                ((IPersistFile)link).Load(linkPath, 0);
+                IShellLinkW target = (IShellLinkW)link;
+                StringBuilder path = new StringBuilder(32768), arguments = new StringBuilder(32768), directory = new StringBuilder(32768);
+                target.GetPath(path, path.Capacity, IntPtr.Zero, 0);
+                target.GetArguments(arguments, arguments.Capacity);
+                target.GetWorkingDirectory(directory, directory.Capacity);
+                return new ShortcutInfo { TargetPath = path.ToString(), Arguments = arguments.ToString(), WorkingDirectory = directory.ToString() };
+            } finally { Marshal.FinalReleaseComObject(link); }
         }
         public static void Apply(string linkPath, string id, string executable) {
             object link = new ShellLink();

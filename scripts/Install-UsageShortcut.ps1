@@ -19,7 +19,6 @@ else {
         if (Test-Path -LiteralPath $pin) { $paths += $pin }
     }
 }
-$shell = New-Object -ComObject WScript.Shell
 if (-not ('UsageSidebar.ShortcutProperties' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'ShortcutProperties.cs') }
 foreach ($linkPath in $paths) {
     $full = Assert-AppPlainPath $linkPath -AllowMissing
@@ -34,11 +33,9 @@ foreach ($linkPath in $paths) {
         $saved = Join-Path $backup ($hash + '.lnk')
         if (-not (Test-Path -LiteralPath $saved)) { [IO.File]::Copy($full,$saved,$false) }
     }
-    $link = $shell.CreateShortcut($full)
-    $link.TargetPath = $exe; $link.Arguments = ''; $link.WorkingDirectory = $copy.appDir
-    $link.IconLocation = $exe + ',0'; $link.Description = 'Codex Usage Sidebar'; $link.Save()
+    [UsageSidebar.ShortcutProperties]::Create($full,$exe,$copy.appDir)
     [UsageSidebar.ShortcutProperties]::Apply($full,'Local.CodexUsageSidebar',$exe)
-    $readback = $shell.CreateShortcut($full)
+    $readback = [UsageSidebar.ShortcutProperties]::Read($full)
     $id = [UsageSidebar.ShortcutProperties]::ReadAppId($full)
     if ($readback.TargetPath -ine $exe -or $readback.Arguments -ne '' -or $id -cne 'Local.CodexUsageSidebar') { throw "Shortcut readback failed: $full" }
     [pscustomobject]@{ path=$full; target=$readback.TargetPath; arguments=$readback.Arguments; appUserModelId=$id }

@@ -13,7 +13,7 @@ if (Test-Path -LiteralPath $settingsFile) {
 }
 if (Test-Path -LiteralPath $base) { $null = @(Get-UsageCopyTree $base) }
 if (-not $PSCmdlet.ShouldProcess($base,'Remove managed app copies and their shortcuts; keep all account data and original Store app')) { return }
-$shell = New-Object -ComObject WScript.Shell
+if (-not ('UsageSidebar.ShortcutProperties' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'ShortcutProperties.cs') }
 $locks = @()
 try {
 if (Test-Path -LiteralPath $base) {
@@ -30,7 +30,7 @@ $links = @(
 )
 foreach ($link in $links) {
     if ([IO.File]::Exists($link)) {
-        $target = $shell.CreateShortcut($link).TargetPath
+        $target = [UsageSidebar.ShortcutProperties]::Read($link).TargetPath
         if ($target -and (Test-AppPathInside $target $base)) { Remove-Item -LiteralPath $link }
     }
 }
