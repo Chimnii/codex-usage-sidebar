@@ -1,25 +1,32 @@
 # Codex Usage Sidebar
 
-Codex Windows 앱에서 GPT, Antigravity Gemini·Argon, Claude 사용량을 확인하는 비공식 로컬 확장입니다.
+**English** · [한국어](README.ko.md)
 
-- 게이지·사용률·초기화 시간 표시, 약 1분 간격 갱신
-- 원본 앱을 보존하고 기존 로그인·대화를 사용하는 별도 복사본
-- 작업표시줄 바로가기, Store 업데이트 확인 및 복사본 재패치
-- Antigravity·Claude는 선택 사항이며 GPT만으로 사용 가능
+An unofficial local extension that keeps GPT, Antigravity Gemini/Argon, and Claude usage always visible in the Codex Windows sidebar.
 
-## 시작
+- Usage gauges, percentages, and reset times, refreshed about once a minute
+- A separate app copy that preserves the original and uses your existing login and conversations
+- Taskbar shortcut, Store update checks, and automatic repatching after updates
+- Antigravity and Claude are optional; GPT works on its own
 
-Windows x64에서 Microsoft Store 원본 앱을 설치하고 한 번 로그인합니다.
-소스를 원하는 고정 폴더에 내려받은 뒤 앱을 완전히 종료하고 **Setup.cmd**를 실행하세요.
-프로젝트 전용 Node와 고정 버전 라이브러리를 준비하며 관리자 권한은 필요하지 않습니다.
+## How it works
 
-설치 후 시작 메뉴의 **Codex Usage Sidebar**를 실행하고 작업표시줄에 고정하면 됩니다.
-업데이트는 앱의 **도움말 → 업데이트 확인** 또는 하단 업데이트 버튼으로 진행합니다.
+Injects [ChatGPT Layer](https://github.com/LightHaru/chatgpt-layer) into `app.asar` and updates the EXE's ASAR integrity hash.
+Patches a separate copy to avoid Store directory write restrictions, sharing the original user profile.
 
-[설정·복구 가이드](docs/SETUP.md) · [구조·개발](docs/DEVELOPMENT.md)
+## Get started
 
-앱 바이너리와 계정 정보는 배포하지 않습니다. 복사본은 원본과 사용자 데이터를 공유합니다.
-OpenAI 공식 제품이나 승인된 플러그인이 아니며, 앱 수정에는 서비스 이용 조건이 별도로 적용됩니다.
-Claude 직접 OAuth 조회는 기본 비활성화된 실험적 연결입니다.
+On Windows x64, install the original app from Microsoft Store and sign in once.
+Download the source into a permanent folder, fully quit the app, and run **Setup.cmd**.
+Setup installs a project-local Node runtime and pinned dependencies; administrator rights are not required.
 
-MIT · [외부 라이브러리 고지](THIRD_PARTY_NOTICES.md) · [인증·데이터 취급](docs/DATA.md)
+Launch **Codex Usage Sidebar** from the Start menu and pin it to the taskbar.
+Use **Help → Check for updates** or the update button at the bottom of the app to check for or apply updates.
+
+[Setup and recovery guide](docs/SETUP.md) · [Architecture and development](docs/DEVELOPMENT.md) — detailed guides are currently in Korean.
+
+App binaries and account data are not distributed. The copy shares user data with the original app.
+This is not an official OpenAI product or an approved plugin; applicable service terms remain separate from the project license.
+Direct Claude OAuth usage queries are experimental and disabled by default on new installations.
+
+MIT · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Authentication and data handling (Korean)](docs/DATA.md)
