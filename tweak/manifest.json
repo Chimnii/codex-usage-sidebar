@@ -1,0 +1,14 @@
+{
+  "id": "local.sidebar-usage-demo",
+  "name": "Codex Usage Sidebar",
+  "version": "1.0.0",
+  "githubRepo": "Chimnii/codex-usage-sidebar",
+  "description": "독립 로컬 수집기에서 Codex, Antigravity Gemini, Claude 사용량을 받아 사이드바 하단에 표시합니다.",
+  "scope": "both",
+  "main": "index.js",
+  "minRuntime": "1.1.4",
+  "permissions": [
+    "ipc",
+    "filesystem"
+  ]
+}

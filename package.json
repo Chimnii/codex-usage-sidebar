@@ -1,0 +1,16 @@
+{
+  "name": "codex-usage-sidebar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local usage sidebar and managed updates for the Codex Windows desktop app",
+  "license": "MIT",
+  "repository": "github:Chimnii/codex-usage-sidebar",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node scripts/test.cjs",
+    "test:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Windows.ps1",
+    "release": "node scripts/package-release.cjs"
+  },
+  "dependencies": { "@electron/asar": "3.4.1", "chatgpt-layer": "1.1.4" },
+  "devDependencies": { "playwright": "1.56.1" }
+}
