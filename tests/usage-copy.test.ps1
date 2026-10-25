@@ -35,7 +35,7 @@ function Fingerprint {
 function Run-Case {
     param([string]$Name,[scriptblock]$Action)
     try { $detail = & $Action; $results.Add([pscustomobject]@{ name=$Name; status='passed'; detail=$detail }); Write-Host "PASS $Name" }
-    catch { $results.Add([pscustomobject]@{ name=$Name; status='failed'; error=$_.Exception.Message; location=$_.ScriptStackTrace }); Write-Host "FAIL $Name : $($_.Exception.Message)" }
+    catch { $results.Add([pscustomobject]@{ name=$Name; status='failed'; error=$_.Exception.Message; location=$_.ScriptStackTrace }); Write-Host "FAIL $Name : $($_.Exception.Message)"; Write-Host $_.ScriptStackTrace }
 }
 $sourceBefore = Fingerprint $v1
 $profileBefore = Fingerprint $fixture.settings.userProfile

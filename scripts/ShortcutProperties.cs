@@ -48,5 +48,16 @@ namespace UsageSidebar {
             } finally { Marshal.FinalReleaseComObject(link); }
             SHChangeNotify(0x2000, 0x1005, linkPath, IntPtr.Zero);
         }
+        public static string ReadAppId(string linkPath) {
+            object link = new ShellLink();
+            try {
+                ((IPersistFile)link).Load(linkPath, 0);
+                PropertyKey key = new PropertyKey(5);
+                PropVariant value;
+                ((IPropertyStore)link).GetValue(ref key, out value);
+                try { return value.type == 31 ? Marshal.PtrToStringUni(value.value) : null; }
+                finally { PropVariantClear(ref value); }
+            } finally { Marshal.FinalReleaseComObject(link); }
+        }
     }
 }
