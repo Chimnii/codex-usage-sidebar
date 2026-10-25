@@ -249,11 +249,21 @@ Case 'uninstall planning preserves copy and user data' {
     Assert-True (Test-Path -LiteralPath (Join-Path $project '.local/copy/current.json')) 'Planning removed copy'
 }
 Case 'uninstall removes only the managed copy and leaves original and profile' {
+    if (-not ('UsageSidebar.ShortcutProperties' -as [type])) { Add-Type -Path (Join-Path $project 'scripts/ShortcutProperties.cs') }
+    $copy=Read-UsageCopyCurrent $project
+    $owned=Join-Path $project 'ChatGPT with Usage.lnk'
+    $legacy=Join-Path $project 'Old custom copy name.lnk'
+    $foreign=Join-Path $project 'ChatGPT.lnk'
+    foreach ($link in @($owned,$legacy)) { [UsageSidebar.ShortcutProperties]::Create($link,(Join-Path $copy.appDir 'ChatGPT.exe'),$copy.appDir) }
+    [UsageSidebar.ShortcutProperties]::Create($foreign,(Join-Path $source 'ChatGPT.exe'),$source)
+    $foreignBefore=(Get-FileHash -LiteralPath $foreign).Hash
     & (Join-Path $project 'scripts/Uninstall.ps1') -ProjectRoot $project -Confirm:$false
     $remaining=@(Get-ChildItem -LiteralPath (Join-Path $project '.local/copy') -Force | Where-Object Name -NotIn @('start.lock','update.lock','prepare.lock'))
     Assert-True ($remaining.Count -eq 0) 'Copy data was not removed'
     Assert-True (Test-Path -LiteralPath (Join-Path $source 'ChatGPT.exe')) 'Original fixture removed'
     Assert-True ([IO.File]::ReadAllText((Join-Path $settings.codexHome 'keep.txt')) -eq 'profile sentinel') 'Profile removed'
+    Assert-True (-not [IO.File]::Exists($owned) -and -not [IO.File]::Exists($legacy)) 'Owned shortcuts were not removed'
+    Assert-True ((Get-FileHash -LiteralPath $foreign).Hash -ceq $foreignBefore) 'Original app shortcut was removed or changed'
 }
 $out=Join-Path $root ('.local/test-results/release-setup-ps'+$PSVersionTable.PSVersion.Major+'.json')
 [IO.Directory]::CreateDirectory((Split-Path $out -Parent)) | Out-Null

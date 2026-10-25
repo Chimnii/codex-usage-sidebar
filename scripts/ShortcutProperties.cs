@@ -33,6 +33,9 @@ namespace UsageSidebar {
         public string TargetPath;
         public string Arguments;
         public string WorkingDirectory;
+        public string Description;
+        public string IconPath;
+        public int IconIndex;
     }
     [StructLayout(LayoutKind.Sequential)]
     internal struct PropertyKey {
@@ -54,6 +57,7 @@ namespace UsageSidebar {
         void Commit();
     }
     public static class ShortcutProperties {
+        public const string DisplayName = "ChatGPT with Usage";
         [DllImport("ole32.dll")] private static extern int PropVariantClear(ref PropVariant value);
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern void SHChangeNotify(uint eventId, uint flags, string item1, IntPtr item2);
@@ -70,7 +74,7 @@ namespace UsageSidebar {
                 target.SetArguments("");
                 target.SetWorkingDirectory(workingDirectory);
                 target.SetIconLocation(executable, 0);
-                target.SetDescription("Codex Usage Sidebar");
+                target.SetDescription(DisplayName);
                 ((IPersistFile)link).Save(linkPath, true);
             } finally { Marshal.FinalReleaseComObject(link); }
         }
@@ -80,10 +84,15 @@ namespace UsageSidebar {
                 ((IPersistFile)link).Load(linkPath, 0);
                 IShellLinkW target = (IShellLinkW)link;
                 StringBuilder path = new StringBuilder(32768), arguments = new StringBuilder(32768), directory = new StringBuilder(32768);
+                StringBuilder description = new StringBuilder(32768), icon = new StringBuilder(32768);
+                int iconIndex;
                 target.GetPath(path, path.Capacity, IntPtr.Zero, 0);
                 target.GetArguments(arguments, arguments.Capacity);
                 target.GetWorkingDirectory(directory, directory.Capacity);
-                return new ShortcutInfo { TargetPath = path.ToString(), Arguments = arguments.ToString(), WorkingDirectory = directory.ToString() };
+                target.GetDescription(description, description.Capacity);
+                target.GetIconLocation(icon, icon.Capacity, out iconIndex);
+                return new ShortcutInfo { TargetPath = path.ToString(), Arguments = arguments.ToString(), WorkingDirectory = directory.ToString(),
+                    Description = description.ToString(), IconPath = icon.ToString(), IconIndex = iconIndex };
             } finally { Marshal.FinalReleaseComObject(link); }
         }
         public static void Apply(string linkPath, string id, string executable) {
@@ -95,17 +104,23 @@ namespace UsageSidebar {
                 Set(store, 5, id);
                 Set(store, 2, "\"" + executable + "\"");
                 Set(store, 3, executable + ",0");
-                Set(store, 4, "Codex Usage Sidebar");
+                Set(store, 4, DisplayName);
                 store.Commit();
                 file.Save(linkPath, true);
             } finally { Marshal.FinalReleaseComObject(link); }
             SHChangeNotify(0x2000, 0x1005, linkPath, IntPtr.Zero);
         }
         public static string ReadAppId(string linkPath) {
+            return ReadProperty(linkPath, 5);
+        }
+        public static string ReadDisplayName(string linkPath) {
+            return ReadProperty(linkPath, 4);
+        }
+        private static string ReadProperty(string linkPath, uint id) {
             object link = new ShellLink();
             try {
                 ((IPersistFile)link).Load(linkPath, 0);
-                PropertyKey key = new PropertyKey(5);
+                PropertyKey key = new PropertyKey(id);
                 PropVariant value;
                 ((IPropertyStore)link).GetValue(ref key, out value);
                 try { return value.type == 31 ? Marshal.PtrToStringUni(value.value) : null; }

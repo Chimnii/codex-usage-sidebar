@@ -24,14 +24,14 @@ if (Test-Path -LiteralPath $base) {
         $locks += [IO.File]::Open((Join-Path $base $name),'OpenOrCreate','ReadWrite',[IO.FileShare]::None)
     }
 }
-$links = @(
-    (Join-Path $ProjectRoot 'Codex Usage Sidebar.lnk'),
-    (Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Usage Sidebar.lnk'),
-    (Join-Path $env:APPDATA 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/Codex Usage Sidebar.lnk')
-)
+$links = @()
+foreach ($folder in @($ProjectRoot, [Environment]::GetFolderPath('Programs'),
+    (Join-Path $env:APPDATA 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar'))) {
+    if ([IO.Directory]::Exists($folder)) { $links += @(Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -File | ForEach-Object FullName) }
+}
 foreach ($link in $links) {
     if ([IO.File]::Exists($link)) {
-        $target = [UsageSidebar.ShortcutProperties]::Read($link).TargetPath
+        try { $target = [UsageSidebar.ShortcutProperties]::Read($link).TargetPath } catch { continue }
         if ($target -and (Test-AppPathInside $target $base)) { Remove-Item -LiteralPath $link }
     }
 }

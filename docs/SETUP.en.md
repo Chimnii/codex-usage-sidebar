@@ -2,7 +2,7 @@
 
 1. On Windows x64, open the original Microsoft Store app and sign in once.
 2. Keep this project in a permanent folder. Fully quit the app and run **Setup.cmd**.
-3. Launch **Codex Usage Sidebar** from the Start menu and pin that shortcut to the taskbar.
+3. Launch **ChatGPT with Usage** from the Start menu. Right-click the shortcut and choose **Pin to taskbar** once. Later Setup runs update existing pins pointing to this copy, regardless of their filename.
 
 Initial setup needs internet access. It verifies and installs a private Node runtime and pinned dependencies under `.local`; system Node and PATH are unchanged.
 Setup prepares this private environment once even if the app previously used another Node or a development environment.

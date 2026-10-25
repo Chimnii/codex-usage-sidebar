@@ -197,6 +197,44 @@ Run-Case 'direct executable shortcut has no CMD arguments and has the copy AppUs
     $result = & (Join-Path $project 'scripts/Install-UsageShortcut.ps1') -ProjectRoot $project -OutputPath $lnk
     Assert-True ($result.target -ieq (Join-Path $second.copy.appDir 'ChatGPT.exe')) 'Not a direct EXE shortcut.'
     Assert-True ($result.arguments -ceq '' -and $result.appUserModelId -ceq 'Local.CodexUsageSidebar') 'Shell identity mismatch.'
+    Assert-True ($result.displayName -ceq 'ChatGPT with Usage') 'Copy display name is ambiguous.'
+    Assert-True ([UsageSidebar.ShortcutProperties]::ReadDisplayName($lnk) -ceq 'ChatGPT with Usage') 'Shell relaunch name not set.'
+}
+
+Run-Case 'shortcut migration updates owned pins and preserves original-app links' {
+    $programs = Join-Path $testRoot 'shortcut-programs'
+    $roaming = Join-Path $testRoot 'shortcut-roaming'
+    $pins = Join-Path $roaming 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar'
+    foreach ($folder in @($programs,$pins)) { [void][IO.Directory]::CreateDirectory($folder) }
+    $exe = Join-Path $second.copy.appDir 'ChatGPT.exe'
+    $oldMenu = Join-Path $programs 'Codex Usage Sidebar.lnk'
+    $oldProject = Join-Path $project 'Codex Usage Sidebar.lnk'
+    $pinned = Join-Path $pins 'ChatGPT.lnk'
+    foreach ($link in @($oldMenu,$oldProject,$pinned)) { [UsageSidebar.ShortcutProperties]::Create($link,$exe,$second.copy.appDir) }
+    $foreign = Join-Path $programs 'ChatGPT.lnk'
+    $foreignPin = Join-Path $pins 'Original ChatGPT.lnk'
+    foreach ($link in @($foreign,$foreignPin)) { [UsageSidebar.ShortcutProperties]::Create($link,(Join-Path $v1 'ChatGPT.exe'),$v1) }
+    $foreignBefore = (Get-FileHash -LiteralPath $foreign).Hash
+    $pinBefore = (Get-FileHash -LiteralPath $foreignPin).Hash
+    # Redirect only the Windows Shell folders in this disposable fixture.
+    $installer = Join-Path $project 'scripts/Install-UsageShortcut.ps1'
+    $source = [IO.File]::ReadAllText($installer)
+    $redirected = $source.Replace("[Environment]::GetFolderPath('Programs')", ("'" + $programs.Replace("'","''") + "'"))
+    [IO.File]::WriteAllText($installer,$redirected)
+    $previousAppData = $env:APPDATA
+    try {
+        $env:APPDATA = $roaming
+        & $installer -ProjectRoot $project -UpdateExistingPin -WhatIf | Out-Null
+        Assert-True ([IO.File]::Exists($oldMenu) -and -not [IO.File]::Exists((Join-Path $programs 'ChatGPT with Usage.lnk'))) 'WhatIf changed shortcuts.'
+        $null = & $installer -ProjectRoot $project -UpdateExistingPin
+        Assert-True ([IO.File]::Exists((Join-Path $programs 'ChatGPT with Usage.lnk'))) 'New Start-menu shortcut missing.'
+        Assert-True (-not [IO.File]::Exists($oldMenu) -and -not [IO.File]::Exists($oldProject)) 'Owned legacy aliases remain.'
+        Assert-True ([IO.File]::Exists($pinned) -and [UsageSidebar.ShortcutProperties]::ReadDisplayName($pinned) -ceq 'ChatGPT with Usage') 'Existing pinned filename was not preserved and updated.'
+        Assert-True ([UsageSidebar.ShortcutProperties]::ReadAppId($pinned) -ceq 'Local.CodexUsageSidebar') 'Pin grouping changed.'
+        Assert-True ((Get-FileHash -LiteralPath $foreign).Hash -ceq $foreignBefore -and (Get-FileHash -LiteralPath $foreignPin).Hash -ceq $pinBefore) 'Original-app link changed.'
+        $null = & $installer -ProjectRoot $project -UpdateExistingPin
+        Assert-True ([UsageSidebar.ShortcutProperties]::ReadDisplayName($pinned) -ceq 'ChatGPT with Usage') 'Repeated shortcut setup failed.'
+    } finally { $env:APPDATA = $previousAppData; [IO.File]::WriteAllText($installer,$source) }
 }
 
 $badCode = 'require(process.argv[2]).createFixture(process.argv[3],{version:"1.2.5",mainSource:"module.exports={unsupported:true};"}).catch(e=>{console.error(e);process.exitCode=1})'

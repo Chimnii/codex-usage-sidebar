@@ -9,7 +9,7 @@ An unofficial local extension that keeps GPT, Antigravity Gemini/Argon, and Clau
 - Taskbar shortcut, Store update checks, and automatic repatching after updates
 - Antigravity and Claude are optional; GPT works on its own
 
-Disabled providers stay hidden. Hover or focus the panel to refresh; display order, language, and polling intervals are configurable.
+Disabled providers stay hidden. Hover over the panel or use keyboard focus to reveal the refresh button, then activate it to refresh usage. Display order, language, and polling intervals can be changed in the [settings file](docs/OPTIONS.md).
 
 ## How it works
 
@@ -22,7 +22,7 @@ On Windows x64, install the original app from Microsoft Store and sign in once.
 Download the source into a permanent folder, fully quit the app, and run **Setup.cmd**.
 Setup installs a project-local Node runtime and pinned dependencies; administrator rights are not required.
 
-Launch **Codex Usage Sidebar** from the Start menu and pin it to the taskbar.
+Launch **ChatGPT with Usage** from the Start menu. Right-click that shortcut and choose **Pin to taskbar** once; Setup updates existing pins but does not create new pins automatically.
 Use **Help → Check for updates** or the update button at the bottom of the app to check for or apply updates.
 
 [Setup and recovery](docs/SETUP.en.md) · [Display options](docs/OPTIONS.md) · [Compatibility](docs/COMPATIBILITY.md)
