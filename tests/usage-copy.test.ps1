@@ -94,102 +94,86 @@ if ($LASTEXITCODE -ne 0) { throw 'v2 fixture creation failed.' }
 $v2 = Join-Path $sources 'source-v2'
 Copy-Item -LiteralPath (Join-Path $testRoot 'v2-input/clean app') -Destination $v2 -Recurse
 Copy-Item -LiteralPath (Join-Path $v1 'resources/codex.exe') -Destination (Join-Path $v2 'resources/codex.exe')
-Run-Case 'minor update keeps the executable path fixed and retains one previous version' {
-    $oldApp = Fingerprint $first.copy.appDir
+Run-Case 'minor update keeps one app and reuses its CLI without duplicate binaries' {
     $script:second = & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
-    Assert-True ($second.status -ceq 'prepared' -and $second.copy.buildDir -ceq $first.copy.buildDir -and $second.copy.generation -cne $first.copy.generation) 'Stable slot or fresh patch missing.'
-    Assert-True ($second.copy.packageFullName -ceq 'synthetic-v2') 'Wrong update version.'
-    $previous = Read-UsageCopyCurrent $project previous
-    Assert-True ((Fingerprint $previous.appDir) -ceq $oldApp) 'Backup does not contain the previous app.'
-    Assert-True ((Fingerprint $fixture.settings.userProfile) -ceq $profileBefore) 'Update changed the original user data.'
-    $backupAsar = Get-ChildItem -LiteralPath $second.copy.backupDir -Filter 'app.asar' -Recurse | Select-Object -First 1
-    Assert-True ($null -ne $backupAsar) 'Fresh source backup missing.'
-    Assert-True ((Get-FileHash -LiteralPath $backupAsar.FullName).Hash -ceq (Get-FileHash -LiteralPath (Join-Path $v2 'resources/app.asar')).Hash) 'Update backup does not match new version.'
+    Assert-True ($second.copy.buildDir -ceq $first.copy.buildDir -and $second.copy.generation -cne $first.copy.generation) 'Stable slot or fresh generation missing.'
+    $base=Join-Path $project '.local/copy'
+    foreach($name in @('previous','previous.json','retired','staging','active/original-pair','active/patch','active/layer-data/bin/codex.exe')) {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $base $name))) ('Unexpected duplicate: '+$name)
+    }
+    $collector=Read-AppJson (Join-Path $second.copy.layerRoot 'tweak-data/local.sidebar-usage-demo/collector-config.json')
+    Assert-True ($collector.cliSource -ceq 'app') 'Collector must use the app CLI.'
+    Assert-True ((Fingerprint $fixture.settings.userProfile) -ceq $profileBefore) 'Update changed user data.'
 }
-
-Run-Case 'third activation replaces the older backup and keeps exactly two complete slots' {
-    $script:second = & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -ForceRebuild -Confirm:$false
-    $previous = Read-UsageCopyCurrent $project previous
-    Assert-True ($previous.packageFullName -ceq 'synthetic-v2') 'Oldest backup was retained.'
-    Assert-True (-not (Test-Path (Join-Path $project '.local/copy/retired'))) 'Retired backup was not removed.'
-    Assert-True (-not (Test-Path (Join-Path $project '.local/copy/staging'))) 'Staging was not consumed.'
-    Assert-True (-not (Test-Path (Join-Path $project '.local/copy/builds'))) 'Versioned builds were created.'
+Run-Case 'stage-only preserves active and activates without rebuilding' {
+    $base=Join-Path $project '.local/copy'; $before=Fingerprint (Join-Path $base 'active')
+    $pending=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -StageOnly -ForceRebuild -Confirm:$false
+    Assert-True ((Fingerprint (Join-Path $base 'active')) -ceq $before) 'Staging changed active.'
+    $old=Read-UsageCopyCurrent $project; $old.revision='old-active-revision'; Write-AppJson (Join-Path $base 'current.json') $old
+    $script:second=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
+    Assert-True ($second.copy.generation -ceq $pending.copy.generation) 'Staged copy rebuilt.'
 }
-
-Run-Case 'stage-only prepares a pending copy without touching the active app or either pointer' {
-    $base = Join-Path $project '.local/copy'
-    $before = Fingerprint (Join-Path $base 'active')
-    $currentText = [IO.File]::ReadAllText((Join-Path $base 'current.json'))
-    $previousText = [IO.File]::ReadAllText((Join-Path $base 'previous.json'))
-    $script:pending = & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -StageOnly -ForceRebuild -Confirm:$false
-    Assert-True ($pending.status -ceq 'staged') 'Copy was not staged.'
-    Assert-True ((Fingerprint (Join-Path $base 'active')) -ceq $before) 'Staging changed active app.'
-    Assert-True ([IO.File]::ReadAllText((Join-Path $base 'current.json')) -ceq $currentText) 'Staging changed current pointer.'
-    Assert-True ([IO.File]::ReadAllText((Join-Path $base 'previous.json')) -ceq $previousText) 'Staging changed previous pointer.'
-}
-
-Run-Case 'pending source revision is activated on the next normal preparation without a rebuild' {
-    # Simulate a source revision prepared in staging while the active copy was open.
-    $base = Join-Path $project '.local/copy'
-    $old = Read-UsageCopyCurrent $project
-    $old.revision = 'earlier-active-revision'
-    Write-AppJson (Join-Path $base 'current.json') $old
-    $script:second = & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
-    Assert-True ($second.copy.generation -ceq $pending.copy.generation) 'Prepared staging was unnecessarily rebuilt.'
-    Assert-True (-not (Test-Path (Join-Path $base 'staging'))) 'Staging was not activated.'
-    Assert-True ((Read-UsageCopyCurrent $project previous).generation -ceq $old.generation) 'Activation lost the previous app.'
-}
-
-Run-Case 'interrupted directory swap restores the full old active slot' {
-    $base = Join-Path $project '.local/copy'
-    $active = Read-UsageCopyCurrent $project
-    $oldPrevious = Read-UsageCopyCurrent $project previous
-    $journal = @{old=$active;next=@{generation='never-committed'}}
-    Write-AppJson (Join-Path $base 'activation.json') $journal
-    Move-Item -LiteralPath (Join-Path $base 'previous') -Destination (Join-Path $base 'retired')
-    Move-Item -LiteralPath (Join-Path $base 'active') -Destination (Join-Path $base 'previous')
+Run-Case 'interrupted swap restores the old active bytes before retry' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project
+    $pending=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -StageOnly -ForceRebuild -Confirm:$false
+    Write-AppJson (Join-Path $base 'activation.json') @{operation='replace';old=$old;next=$pending.copy}
+    Move-Item -LiteralPath (Join-Path $base 'active') -Destination (Join-Path $base 'retired')
     Complete-UsageCopyActivation $project
-    $restored = Read-UsageCopyCurrent $project
-    Assert-UsageCopyPair $restored
-    Assert-True ($restored.generation -ceq $active.generation) 'Wrong active version recovered.'
-    Assert-True ((Read-UsageCopyCurrent $project previous).generation -ceq $oldPrevious.generation) 'Previous backup was not recovered.'
-}
-
-Run-Case 'cleanup rejects paths outside managed temporary directories' {
-    $reason = Expect-Failure { Remove-UsageCopyDirectory $project $fixture.settings.userProfile }
-    Assert-True ($reason -match 'unmanaged') 'Unmanaged directory accepted.'
-    Assert-True ((Fingerprint $fixture.settings.userProfile) -ceq $profileBefore) 'Profile changed.'
-}
-
-Run-Case 'interrupted publish after the new directory is active completes its metadata' {
-    $base = Join-Path $project '.local/copy'
-    $active = Read-UsageCopyCurrent $project
-    $previous = Read-UsageCopyCurrent $project previous
-    $next = Convert-UsageCopyLocation $active (Join-Path $base 'staging')
-    $next.generation = 'simulated-committed-generation'
-    Write-AppJson (Join-Path $base 'active/copy.json') $next
-    Write-AppJson (Join-Path $base 'activation.json') @{old=$previous;next=$next}
-    Complete-UsageCopyActivation $project
-    $script:second.copy = Read-UsageCopyCurrent $project
-    Assert-UsageCopyPair $second.copy
-    Assert-True ($second.copy.generation -ceq $next.generation) 'Committed active version was lost.'
-    Assert-True (-not (Test-Path (Join-Path $base 'activation.json'))) 'Activation journal was not completed.'
-}
-
-Run-Case 'file sharing failure cannot replace the running slot bytes and recovery retains both versions' {
-    $base = Join-Path $project '.local/copy'
-    $old = Read-UsageCopyCurrent $project
-    $oldPrevious = Read-UsageCopyCurrent $project previous
-    $before = (Get-FileHash -LiteralPath (Join-Path $old.appDir 'ChatGPT.exe')).Hash
-    $held = [IO.File]::Open((Join-Path $old.appDir 'ChatGPT.exe'),'Open','Read','Read')
-    try {
-        $reason = Expect-Failure { & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -ForceRebuild -Confirm:$false }
-        Assert-True ((Get-FileHash -LiteralPath (Join-Path $old.appDir 'ChatGPT.exe')).Hash -ceq $before) 'Failed rename changed active app.'
-    } finally { $held.Dispose() }
-    Complete-UsageCopyActivation $project
-    Assert-True ((Read-UsageCopyCurrent $project).generation -ceq $old.generation) 'Recovery changed active generation.'
-    Assert-True ((Read-UsageCopyCurrent $project previous).generation -ceq $oldPrevious.generation) 'Recovery lost previous backup.'
+    Assert-True ((Read-UsageCopyCurrent $project).generation -ceq $old.generation) 'Old active lost.'
+    Assert-UsageCopyPair (Read-UsageCopyCurrent $project)
     Remove-UsageCopyDirectory $project (Join-Path $base 'staging')
+}
+Run-Case 'interrupted committed swap finishes metadata and removes retired files' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project
+    $pending=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -StageOnly -ForceRebuild -Confirm:$false
+    Write-AppJson (Join-Path $base 'activation.json') @{operation='replace';old=$old;next=$pending.copy}
+    Move-Item -LiteralPath (Join-Path $base 'active') -Destination (Join-Path $base 'retired')
+    Move-Item -LiteralPath (Join-Path $base 'staging') -Destination (Join-Path $base 'active')
+    Complete-UsageCopyActivation $project
+    $script:second.copy=Read-UsageCopyCurrent $project
+    Assert-True ($second.copy.generation -ceq $pending.copy.generation) 'Committed app lost.'
+    Assert-True (-not (Test-Path (Join-Path $base 'retired'))) 'Retired app retained.'
+}
+Run-Case 'invalid replacement rolls back before exposing a broken app' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project
+    $pending=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -StageOnly -ForceRebuild -Confirm:$false
+    [IO.File]::AppendAllText((Join-Path $pending.copy.appDir 'ChatGPT.exe'),'broken')
+    $reason=Expect-Failure { Publish-UsageCopy $project $pending.copy $old }
+    Assert-True ($reason -match 'hash or length') 'Corrupt replacement accepted.'
+    Assert-True ((Read-UsageCopyCurrent $project).generation -ceq $old.generation) 'Old app lost.'
+    Assert-UsageCopyPair (Read-UsageCopyCurrent $project)
+    Remove-UsageCopyDirectory $project (Join-Path $base 'staging')
+}
+Run-Case 'invalid receipt rolls back an update and rejects an incomplete first install' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project
+    $pending=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -StageOnly -ForceRebuild -Confirm:$false
+    [IO.File]::WriteAllText((Join-Path $pending.copy.buildDir 'copy.json'),'{broken')
+    $reason=Expect-Failure { Publish-UsageCopy $project $pending.copy $old }
+    Assert-True ($reason -match 'receipt') 'Invalid update receipt accepted.'
+    Assert-True ((Read-UsageCopyCurrent $project).generation -ceq $old.generation) 'Old active receipt lost.'
+    Assert-UsageCopyPair (Read-UsageCopyCurrent $project)
+    $held=Join-Path $testRoot 'held-active'
+    Move-Item -LiteralPath (Join-Path $base 'active') -Destination $held
+    try {
+        $reason=Expect-Failure { Publish-UsageCopy $project $pending.copy $null }
+        Assert-True ($reason -match 'receipt') 'Invalid first install receipt accepted.'
+        Assert-True (-not (Test-Path (Join-Path $base 'active'))) 'Invalid first install exposed.'
+    } finally { Move-Item -LiteralPath $held -Destination (Join-Path $base 'active') }
+    Remove-UsageCopyDirectory $project (Join-Path $base 'staging')
+}
+Run-Case 'file sharing failure leaves the selected app unchanged and cleans staging' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project; $before=Fingerprint $old.appDir
+    $held=[IO.File]::Open((Join-Path $old.appDir 'ChatGPT.exe'),'Open','Read','Read')
+    try { $reason=Expect-Failure { & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -ForceRebuild -Confirm:$false } }
+    finally { $held.Dispose() }
+    Assert-True ((Fingerprint $old.appDir) -ceq $before) 'Locked app changed.'
+    Assert-True (-not (Test-Path (Join-Path $base 'staging'))) 'Failed staging retained.'
+}
+Run-Case 'cleanup rejects profile and active paths' {
+    foreach($path in @($fixture.settings.userProfile,$second.copy.buildDir)) {
+        $reason=Expect-Failure { Remove-UsageCopyDirectory $project $path }
+        Assert-True ($reason -match 'unmanaged') 'Unexpected cleanup boundary.'
+    }
 }
 
 Run-Case 'direct executable shortcut has no CMD arguments and has the copy AppUserModelID' {
@@ -266,42 +250,22 @@ Run-Case 'unsupported update preserves selected build and source instead of publ
     Assert-True ((Fingerprint $fixture.settings.userProfile) -ceq $profileBefore) 'Failed update modified user data.'
     return $reason
 }
-Run-Case 'tampered prepared executable is rejected before reuse' {
-    $exe = Join-Path $second.copy.appDir 'ChatGPT.exe'
-    $bytes = [IO.File]::ReadAllBytes($exe)
-    try {
-        [IO.File]::AppendAllText($exe, 'tampered')
-        $reason = Expect-Failure { & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false }
-        Assert-True ($reason -match 'hash or length') 'Corrupt copy did not fail hash validation.'
-    }
-    finally { [IO.File]::WriteAllBytes($exe,$bytes) }
-}
-Run-Case 'preparation entry recovers a missing active slot before reading its pointer' {
-    $base = Join-Path $project '.local/copy'
-    $old = Read-UsageCopyCurrent $project
-    Write-AppJson (Join-Path $base 'activation.json') @{old=$old;next=@{generation='uncommitted-entry-test'}}
-    Move-Item -LiteralPath (Join-Path $base 'previous') -Destination (Join-Path $base 'retired')
-    Move-Item -LiteralPath (Join-Path $base 'active') -Destination (Join-Path $base 'previous')
-    $script:second = & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
+Run-Case 'damaged or missing app rebuilds from source without a previous version' {
+    $old=Read-UsageCopyCurrent $project
+    [IO.File]::AppendAllText((Join-Path $old.appDir 'ChatGPT.exe'),'tampered')
+    $script:second=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
     Assert-UsageCopyPair $second.copy
-    Assert-True ((Read-UsageCopyCurrent $project previous).generation -ceq $old.generation) 'Interrupted active slot was not retained as backup.'
+    Assert-True ($second.copy.generation -cne $old.generation) 'Damaged app reused.'
+    Move-Item -LiteralPath $second.copy.buildDir -Destination (Join-Path $testRoot 'missing-slot')
+    $script:second=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
+    Assert-UsageCopyPair $second.copy
 }
-Run-Case 'one-time legacy migration keeps the previous folder intact and removes other legacy builds' {
-    $base = Join-Path $project '.local/copy'
-    $old = Read-UsageCopyCurrent $project
-    $legacy = Join-Path $base 'builds/legacy-fixture'
-    [void][IO.Directory]::CreateDirectory((Split-Path $legacy -Parent))
-    Move-Item -LiteralPath (Join-Path $base 'active') -Destination $legacy
-    $old = Convert-UsageCopyLocation $old $legacy
-    $old.schemaVersion = 1
-    Write-AppJson (Join-Path $legacy 'copy.json') $old
-    Write-AppJson (Join-Path $base 'current.json') $old
-    $before = Fingerprint $legacy
-    [void][IO.Directory]::CreateDirectory((Join-Path $base 'builds/unused-legacy-fixture'))
-    $script:second = & $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
-    Assert-True ((Fingerprint $legacy) -ceq $before) 'Legacy backup was altered.'
-    Assert-True ((Read-UsageCopyCurrent $project previous).buildDir -ieq $legacy) 'Legacy backup was not selected.'
-    Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $base 'builds') -Directory).Count -eq 1) 'Extra legacy backups remain.'
+Run-Case 'legacy backups are removed after successful preparation' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project; $previous=Join-Path $base 'previous'
+    $null=Copy-UsageAppTree $old.buildDir $previous
+    Write-AppJson (Join-Path $base 'previous.json') (Convert-UsageCopyLocation $old $previous)
+    $script:second=& $script -ProjectRoot $project -FixtureAppDir $v2 -FixtureVersion 'synthetic-v2' -AllowFixture -ForceRebuild -Confirm:$false
+    Assert-True (-not (Test-Path $previous) -and -not (Test-Path (Join-Path $base 'previous.json'))) 'Legacy backup retained.'
 }
 Run-Case 'desktop process guard stops a shared-profile launch without killing any process' {
     Import-Module (Join-Path $project 'scripts/UsageCopy.Common.psm1') -Force -DisableNameChecking

@@ -30,137 +30,46 @@ Case 'missing Antigravity path and absent Claude credentials do not block prepar
 }
 # Only this disposable project's process adapter is mocked. No real app is closed.
 [IO.File]::AppendAllText((Join-Path $project 'scripts/UsageCopy.Common.psm1'),"`nfunction Get-UsageCopyBlockers { return @() }`nExport-ModuleMember -Function *-UsageCopy*, Copy-UsageAppTree`n",$utf8)
-Import-Module (Join-Path $project 'scripts/UsageCopy.Common.psm1') -Force -DisableNameChecking
 [void][IO.Directory]::CreateDirectory((Join-Path $settings.appData 'Codex/web/Codex'))
 [IO.File]::WriteAllText((Join-Path $settings.codexHome 'keep.txt'),'profile sentinel',$utf8)
-$source=Join-Path $project '.local/tests/app'
-[void][IO.Directory]::CreateDirectory((Split-Path $source -Parent))
-Copy-Item -LiteralPath $f.appDir -Destination $source -Recurse
+$source=$f.appDir
 $prepare=Join-Path $project 'scripts/Prepare-UsageCopy.ps1'
-Case 'previous version restoration preserves shared profile and enables a hold' {
-    $a=& $prepare -ProjectRoot $project -FixtureAppDir $source -FixtureVersion 'synthetic-v1' -AllowFixture -Confirm:$false
-    $b=& $prepare -ProjectRoot $project -FixtureAppDir $source -FixtureVersion 'synthetic-v2' -AllowFixture -Confirm:$false
-    $restored=& (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -Confirm:$false
-    Assert-True ($restored.packageFullName -eq 'synthetic-v1') 'Previous version not selected'
-    $hold=Get-Content -Encoding UTF8 -LiteralPath (Join-Path $project '.local/copy/restore-hold.json') -Raw | ConvertFrom-Json
-    Assert-True ($hold.generation -eq $restored.generation) 'Hold missing'
-    Assert-True ([IO.File]::ReadAllText((Join-Path $settings.codexHome 'keep.txt')) -eq 'profile sentinel') 'Profile changed'
+# Redirect external adapters only inside the disposable project.
+$adapter=@'
+function Get-UsageTarget {
+    param($Configuration, [string]$FixtureAppDir, [switch]$AllowFixture)
+    return [pscustomobject]@{appDir=(Join-Path (Split-Path $Configuration.root -Parent) 'clean app');packageFullName='synthetic-current';fixture=$true}
 }
-Case 'launch respects the restored version instead of preparing the current original' {
-    $launcher=Join-Path $project 'scripts/Start-UsageCopy.ps1'
-    $text=[IO.File]::ReadAllText($launcher).Replace('$process = [Diagnostics.Process]::Start($start)',"throw 'fixture-launch-boundary'")
-    [IO.File]::WriteAllText($launcher,$text,$utf8)
-    $caught=$null;try{& $launcher -ProjectRoot $project}catch{$caught=$_.Exception.Message}
-    Assert-True ($caught -eq 'fixture-launch-boundary') ('Hold did not reach launch boundary: '+$caught)
-}
+Export-ModuleMember -Function Get-UsageSettings, Get-UsageTarget
+'@
+[IO.File]::AppendAllText((Join-Path $project 'scripts/Environment.Common.psm1'),"`n"+$adapter,$utf8)
+Import-Module (Join-Path $project 'scripts/UsageCopy.Common.psm1') -Force -DisableNameChecking
+[IO.File]::WriteAllText((Join-Path $project 'scripts/Install-UsageShortcut.ps1'),'param($ProjectRoot,[switch]$UpdateExistingPin)',$utf8)
 function Get-TreeFingerprint([string]$path) {
-    return (@(Get-ChildItem -LiteralPath $path -File -Recurse | Sort-Object FullName | ForEach-Object {
-        $_.FullName.Substring($path.Length)+':'+(Get-FileHash -LiteralPath $_.FullName).Hash
-    }) -join "`n")
+    return (@(Get-ChildItem -LiteralPath $path -File -Recurse | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($path.Length)+':'+(Get-FileHash -LiteralPath $_.FullName).Hash }) -join "`n")
 }
-function Assert-OwnedTestPath([string]$path) {
-    $full=Assert-AppPlainPath $path -AllowMissing
-    if (-not (Test-AppPathInside $full $project)) { throw 'Fixture boundary violation' }
-    return $full
-}
-Case 'damaged active executable is quarantined while the verified rollback remains unchanged' {
-    $current=Read-UsageCopyCurrent $project
-    $previous=Read-UsageCopyCurrent $project previous
-    $backup=Get-TreeFingerprint $previous.buildDir
-    [IO.File]::AppendAllText((Join-Path $current.appDir 'ChatGPT.exe'),'damaged fixture')
-    Write-AppJson (Join-Path $current.buildDir 'copy.json') @{interrupted='incomplete active metadata'}
-    $broken=(Get-FileHash -LiteralPath (Join-Path $current.appDir 'ChatGPT.exe')).Hash
+Case 'repair recreates from installed source and preserves shared data' {
+    $a=& $prepare -ProjectRoot $project -Confirm:$false; $profile=Get-TreeFingerprint $settings.userProfile
+    [IO.File]::AppendAllText((Join-Path $a.copy.appDir 'ChatGPT.exe'),'damaged')
     $restored=& (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -Confirm:$false
     Assert-UsageCopyPair $restored
-    Assert-True ((Get-TreeFingerprint $previous.buildDir) -ceq $backup) 'Repair replaced the good rollback'
-    Assert-True ((Get-FileHash -LiteralPath (Join-Path $project '.local/copy/damaged/app/ChatGPT.exe')).Hash -ceq $broken) 'Damaged active was not preserved'
-    Assert-True ($restored.generation -like 'repair-*') 'Repair has no distinct generation'
+    Assert-True ($a.copy.packageFullName -ceq 'synthetic-current' -and $restored.packageFullName -ceq 'synthetic-current') 'Repair fixture queried the real installed app'
+    Assert-True ($restored.generation -cne $a.copy.generation) 'Repair did not rebuild'
+    Assert-True ((Get-TreeFingerprint $settings.userProfile) -ceq $profile) 'Repair changed profile'
+    Assert-True (-not (Test-Path (Join-Path $project '.local/copy/previous'))) 'Repair retained old app'
 }
-Case 'missing active app can be restored without losing the rollback backup' {
-    $current=Read-UsageCopyCurrent $project
-    $previous=Read-UsageCopyCurrent $project previous
-    $backup=Get-TreeFingerprint $previous.buildDir
-    $from=Assert-OwnedTestPath $current.buildDir
-    $to=Assert-OwnedTestPath (Join-Path $project '.local/tests/removed-active')
-    Move-Item -LiteralPath $from -Destination $to
-    $restored=& (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -Confirm:$false
-    Assert-UsageCopyPair $restored
-    Assert-True ((Get-TreeFingerprint $previous.buildDir) -ceq $backup) 'Missing-slot repair replaced rollback'
-}
-Case 'repair crash after quarantining active resumes and keeps a verified backup' {
-    $base=Join-Path $project '.local/copy'
-    $previous=Read-UsageCopyCurrent $project previous
-    $backup=Get-TreeFingerprint $previous.buildDir
-    $stage=Join-Path $base 'staging'
-    $null=Copy-UsageAppTree $previous.buildDir $stage
-    $next=Convert-UsageCopyLocation $previous $stage
-    $next.generation='repair-interrupted-before-publish'
-    Write-AppJson (Join-Path $stage 'copy.json') $next
-    Write-AppJson (Join-Path $base 'activation.json') @{operation='repair';next=$next;previousGeneration=$previous.generation}
-    $from=Assert-OwnedTestPath (Join-Path $base 'active')
-    $to=Assert-OwnedTestPath (Join-Path $base 'damaged')
-    Move-Item -LiteralPath $from -Destination $to
-    $before=Get-TreeFingerprint $base
+Case 'repair planning changes nothing' {
+    $before=Get-TreeFingerprint $project
     & (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -WhatIf
-    Assert-True ((Get-TreeFingerprint $base) -ceq $before) 'Restore planning changed interrupted repair state'
-    $resumed=& (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -Confirm:$false
-    Assert-True ($resumed.generation -eq $next.generation) 'Restore did not return resumed repair generation'
-    Assert-UsageCopyPair (Read-UsageCopyCurrent $project)
-    Assert-True ((Read-UsageCopyCurrent $project).generation -eq $next.generation) 'Repair was not resumed'
-    Assert-True ((Get-TreeFingerprint $previous.buildDir) -ceq $backup) 'Recovery changed rollback'
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $base 'activation.json'))) 'Repair journal remains'
+    Assert-True ((Get-TreeFingerprint $project) -ceq $before) 'Repair WhatIf wrote files'
 }
-Case 'repair crash after activation completes pointers and restore hold' {
-    $base=Join-Path $project '.local/copy'
-    $previous=Read-UsageCopyCurrent $project previous
-    $current=Read-UsageCopyCurrent $project
-    $next=Convert-UsageCopyLocation $current (Join-Path $base 'staging')
-    $next.generation='repair-interrupted-after-publish'
-    Write-AppJson (Join-Path $base 'active/copy.json') $next
-    Write-AppJson (Join-Path $base 'activation.json') @{operation='repair';next=$next;previousGeneration=$previous.generation}
-    Complete-UsageCopyActivation $project
-    Assert-UsageCopyPair (Read-UsageCopyCurrent $project)
-    Assert-True ((Read-AppJson (Join-Path $base 'restore-hold.json')).generation -eq $next.generation) 'Repair hold missing after recovery'
-}
-Case 'Launch recovers a missing active slot before selecting the restored version' {
-    $base=Join-Path $project '.local/copy'
-    $previous=Read-UsageCopyCurrent $project previous
-    $stage=Join-Path $base 'staging'
-    $null=Copy-UsageAppTree $previous.buildDir $stage
-    $next=Convert-UsageCopyLocation $previous $stage
-    $next.generation='repair-launch-entry'
-    Write-AppJson (Join-Path $stage 'copy.json') $next
-    Remove-UsageCopyDirectory $project (Join-Path $base 'damaged')
-    Write-AppJson (Join-Path $base 'activation.json') @{operation='repair';next=$next;previousGeneration=$previous.generation}
-    $from=Assert-OwnedTestPath (Join-Path $base 'active')
-    $to=Assert-OwnedTestPath (Join-Path $base 'damaged')
-    Move-Item -LiteralPath $from -Destination $to
-    $caught=$null;try { & (Join-Path $project 'scripts/Start-UsageCopy.ps1') -ProjectRoot $project } catch { $caught=$_.Exception.Message }
-    Assert-True ($caught -eq 'fixture-launch-boundary') ('Launch did not recover before selection: '+$caught)
-    Assert-UsageCopyPair (Read-UsageCopyCurrent $project)
-    Assert-True ((Read-UsageCopyCurrent $project).generation -eq $next.generation) 'Launch selected wrong generation'
-}
-Case 'invalid backup cannot replace current and outside metadata is still rejected' {
-    $base=Join-Path $project '.local/copy'
-    $previous=Read-UsageCopyCurrent $project previous
-    $current=Read-UsageCopyCurrent $project
-    $before=Get-TreeFingerprint $current.buildDir
-    $exe=Join-Path $previous.appDir 'ChatGPT.exe'
-    $bytes=[IO.File]::ReadAllBytes($exe)
-    try {
-        [IO.File]::AppendAllText($exe,'tampered backup')
-        $caught=$null;try { & (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -Confirm:$false } catch { $caught=$_.Exception.Message }
-        Assert-True ($caught -match 'hash or length') 'Damaged backup was accepted'
-        Assert-True ((Get-TreeFingerprint $current.buildDir) -ceq $before) 'Rejected repair changed active'
-    } finally { [IO.File]::WriteAllBytes($exe,$bytes) }
-    $pointer=Join-Path $base 'current.json'
-    $receipt=[IO.File]::ReadAllText($pointer)
-    try {
-        $current.buildDir=$settings.userProfile
-        Write-AppJson $pointer $current
-        $caught=$null;try { Read-UsageCopyCurrent $project -AllowMissingSlot } catch { $caught=$_.Exception.Message }
-        Assert-True ($caught -match 'fixed slot') 'AllowMissingSlot weakened path checks'
-    } finally { [IO.File]::WriteAllText($pointer,$receipt,$utf8) }
+Case 'repair handles a missing slot and corrupt current receipt' {
+    $base=Join-Path $project '.local/copy'; $old=Read-UsageCopyCurrent $project
+    Move-Item -LiteralPath $old.buildDir -Destination (Join-Path $work 'missing-slot')
+    [IO.File]::WriteAllText((Join-Path $base 'current.json'),'{broken',$utf8)
+    $restored=& (Join-Path $project 'scripts/Restore-Copy.ps1') -ProjectRoot $project -Confirm:$false
+    Assert-UsageCopyPair $restored
+    Assert-True (-not (Test-Path (Join-Path $base 'retired'))) 'Retired files retained'
 }
 Case 'runtime revision ignores documentation and tests but includes runtime settings and loader' {
     $original=Get-UsageCopyRevision $project $settings
@@ -233,7 +142,7 @@ Case 'Doctor reads local state without leaking paths raw errors or account data'
     $before=Get-TreeFingerprint $project
     $json=& (Join-Path $project 'scripts/Doctor.ps1') -ProjectRoot $project -Json
     $report=$json | ConvertFrom-Json
-    Assert-True ($report.copyIntegrity -eq 'verified' -and $report.repairAvailable) 'Doctor missed verified app/rollback'
+    Assert-True ($report.copyIntegrity -eq 'verified' -and $report.repairMethod -eq 'rebuild-from-installed-app') 'Doctor missed verified app/rollback'
     Assert-True ($report.providers[0].errorCode -eq 'RPC_ERROR') 'Doctor discarded safe collector error code'
     Assert-True ($report.update.storeStatus -eq 'current' -and $null -eq $report.update.storeError) 'Doctor did not sanitize Store diagnostics'
     Assert-True ($json -notmatch [regex]::Escape($marker) -and $json -notmatch [regex]::Escape($project) -and $json -notmatch [regex]::Escape($settings.userProfile)) 'Doctor leaked private data'

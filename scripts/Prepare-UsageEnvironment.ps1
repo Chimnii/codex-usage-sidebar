@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$AppDir,
     [string]$SettingsPath,
     [string]$LayerDataRoot,
+    [string]$ManagedAppDir,
     [switch]$AllowFixture
 )
 
@@ -174,6 +175,13 @@ $tweakRoot = Join-Path $layerRoot 'tweaks\local.sidebar-usage-demo'
 $tweakDataRoot = Join-Path $layerRoot 'tweak-data\local.sidebar-usage-demo'
 $collectorWorkDir = Join-Path $layerRoot 'collector-work'
 $codexPath = Join-Path $layerRoot 'bin\codex.exe'
+if ($ManagedAppDir) {
+    $managed = Get-AppDirectory $ManagedAppDir
+    $expected = Join-Path $ProjectRoot '.local/copy/staging/app'
+    if ($managed -ine $expected -or $layerRoot -ine (Join-Path $ProjectRoot '.local/copy/staging/layer-data')) { throw 'Managed CLI must belong to this staging app.' }
+    $codexPath = Get-UsageFile (Join-Path $managed 'resources/codex.exe')
+    if ((Get-Item -LiteralPath $codexPath).Length -ne $originalCliIdentity.length) { throw 'Managed CLI copy length mismatch.' }
+}
 $collectorConfigPath = Join-Path $tweakDataRoot 'collector-config.json'
 $configPath = Join-Path $layerRoot 'config.json'
 $cachePath = Join-Path $tweakDataRoot 'usage-cache.json'
@@ -205,7 +213,7 @@ $runtimePatch = Invoke-UsageRuntimePatch $nodePath $helperPath $runtimeRoot
 foreach ($directory in @($tweakDataRoot, $collectorWorkDir)) { [void][IO.Directory]::CreateDirectory($directory) }
 # Store-packaged executables can be readable yet denied external launch. This is an
 # unmodified CLI copy only; desktop sessions and authentication still use the real profile.
-Copy-UsageCli $originalCliPath $codexPath $originalCliIdentity
+if (-not $ManagedAppDir) { Copy-UsageCli $originalCliPath $codexPath $originalCliIdentity }
 $collector = [ordered]@{
     projectRoot = $ProjectRoot
     nodePath = $nodePath; codexPath = $codexPath; agyPath = $agyPath; codexHome = $codexHome

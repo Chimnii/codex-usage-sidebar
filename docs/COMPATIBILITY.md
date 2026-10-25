@@ -14,6 +14,7 @@ Windows x64 only. Dependencies are pinned; unknown patch structures are rejected
 | Sidebar source | Store app | Date | Checked |
 |---|---|---|---|
 | 1.1.0 | 26.1021.3705.0 | 2026-10-25 | Generated and verified a patched EXE/ASAR pair in an isolated output directory; source hashes and original ASAR payload preserved |
+| Unreleased | 26.1021.3705.0 | 2026-10-26 | Prepared one complete temporary copy in 18.1s (local measurement, dependencies already installed); 2.25 GiB app/runtime, no duplicate CLI or patch pairs; original payload and source hashes preserved |
 
 The record above is a patch-structure check, not a live sign-in or Store-update test.
 Automated tests separately exercise synthetic profile/copy recovery, update failures, provider configuration, IPC failures, and the UI in headless Edge.

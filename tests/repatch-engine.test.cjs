@@ -104,6 +104,29 @@ async function test(name, fn) {
     return { report: result, originalUnpackedEntryPreserved: true, exeHashOffset: oldHashOffset };
   });
 
+  await test('managed copy preserves the payload and unrelated members without repeated payload hashing', async () => {
+    const f = await fixture('managed-copy');
+    const before = treeFingerprint(f.appDir);
+    assert.match(failure(invoke(f, 'prepare', ['--output-app-dir', path.join(f.root, 'rejected'), '--managed-copy', 'true'])), /portable/i);
+    const out = path.join(f.root, 'managed');
+    const report = success(invoke(f, 'prepare', ['--output-app-dir', out, '--portable-copy', 'true', '--managed-copy', 'true']));
+    assert.equal(report.archive.payloadVerification, 'stream-copy-and-member-validation');
+    assert.equal(report.archive.originalPayloadSha256, undefined);
+    const asar = require(f.asarModule);
+    const archive = path.join(out, 'resources/app.asar');
+    const entries = archiveEntries(asar, f.asarPath), patched = archiveEntries(asar, archive);
+    for (const [name, entry] of entries) {
+      if (['package.json', f.mainName].includes(name)) continue;
+      assert.deepEqual(patched.get(name), entry);
+      if (!entry.unpacked && !entry.link) assert.deepEqual(member(asar, archive, name), member(asar, f.asarPath, name));
+    }
+    const { readArchive } = require('../patcher/repatch/asar-edit.cjs');
+    const sourceInfo = readArchive(f.asarPath, asar), targetInfo = readArchive(archive, asar);
+    const sourceBytes = fs.readFileSync(f.asarPath), targetBytes = fs.readFileSync(archive);
+    assert.deepEqual(targetBytes.subarray(targetInfo.dataOffset, targetInfo.dataOffset + sourceBytes.length - sourceInfo.dataOffset), sourceBytes.subarray(sourceInfo.dataOffset));
+    assert.equal(treeFingerprint(f.appDir), before);
+  });
+
   await test('renamed main, changed app version/content, shifted PE resource still repatch', async () => {
     const f = await fixture('minor-update', { mainName: '.vite/build/main-newHashB.js', version: '1.2.4', versionNote: 'new unrelated application data v2', rawOffset: 0x800 });
     const { out } = prepare(f);

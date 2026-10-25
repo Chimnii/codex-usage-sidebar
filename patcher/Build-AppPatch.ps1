@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory = $true)][string]$OutputDir,
     [string]$NodePath = 'node',
     [string]$AsarModule,
-    [switch]$PortableCopy
+    [switch]$PortableCopy,
+    [switch]$ManagedCopy
 )
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -82,6 +83,10 @@ $pendingManifestPath = [IO.Path]::Combine($output, 'patch-manifest.pending.json'
 $reportPath = [IO.Path]::Combine($patched, 'repatch-report.json')
 $baseArguments = @('--original-app-dir', $original, '--layer-root', $runtime, '--layer-source-root', $layerSource)
 if ($PortableCopy) { $baseArguments += @('--portable-copy', 'true') }
+if ($ManagedCopy) {
+    if (-not $PortableCopy) { throw 'ManagedCopy requires PortableCopy.' }
+    $baseArguments += @('--managed-copy', 'true')
+}
 if (-not [string]::IsNullOrWhiteSpace($AsarModule)) {
     $asarModulePath = Assert-AppPlainPath $AsarModule
     if (Test-AppPathInside $asarModulePath $output) { throw 'AsarModule cannot be inside the new OutputDir.' }
@@ -111,6 +116,22 @@ try {
         throw 'The engine returned a different output application directory.'
     }
     if ($null -eq $report.PSObject.Properties['files'] -or @($report.files).Count -ne 2) { throw 'The engine must report exactly the two app files.' }
+    if ($ManagedCopy) {
+        # The engine has just validated and hashed its output. A fresh staging
+        # tree needs neither another copy nor a second manifest hashing pass.
+        $manifest = [pscustomobject]@{
+            schemaVersion=1; kind='layer-app-file-pair'; createdAt=[DateTime]::UtcNow.ToString('o')
+            build=(Get-AppBuild $original)
+            files=@($report.files | ForEach-Object { [pscustomobject]@{
+                path=$_.path
+                original=[pscustomobject]@{sha256=$_.original.sha256.ToUpperInvariant();length=$_.original.length}
+                patched=[pscustomobject]@{sha256=$_.patched.sha256.ToUpperInvariant();length=$_.patched.length}
+            } })
+        }
+        Assert-AppPatchManifest $manifest
+        Write-AppJson $manifestPath $manifest -CreateNew
+        return [pscustomobject]@{status='prepared';appDir=$original;outputDir=$output;patchedAppDir=$patched;manifestPath=$manifestPath;reportPath=$reportPath;nodePath=$nodeExecutable;engineReport=$report}
+    }
     # Recheck inputs and generated files before writing a usable apply manifest.
     foreach ($relative in @('resources/app.asar', 'ChatGPT.exe')) {
         $matches = @($report.files | Where-Object { $null -ne $_.PSObject.Properties['path'] -and $_.path -ceq $relative })

@@ -1,5 +1,13 @@
 # Changes
 
+## Unreleased
+
+- Show each setup phase on a separate line and keep Setup.cmd open after success or failure until a key is pressed.
+- Keep one managed app after updates; retain the old slot only during the swap. Restore.cmd now rebuilds from the installed original, including missing or damaged copies.
+- Copy resources with Windows robocopy and verify the file inventory and sizes. Generate the EXE/ASAR pair directly from the source and move it into staging without original-pair or duplicate patch backups.
+- Reuse the app's Codex CLI for collection, reuse prepared Layer assets, and remove the private Node download after installation.
+- Keep structural hook detection, source snapshot and patched pair checks; use larger stream buffers and avoid redundant managed-staging hash passes. Report preparation phase durations.
+
 ## 1.1.0
 
 - Use ChatGPT with usage for shortcut and window display names, preserve conversation titles and profile identity, and reuse the original app's themed icons.

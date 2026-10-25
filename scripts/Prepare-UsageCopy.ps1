@@ -21,7 +21,10 @@ $profiles = Get-UsageCopyProfiles $configuration.value
 $base = Assert-AppPlainPath (Join-Path $ProjectRoot '.local/copy') -AllowMissing
 $revision = Get-UsageCopyRevision $ProjectRoot $configuration.value
 $originals = @(foreach ($p in @('resources/app.asar','ChatGPT.exe')) { [pscustomobject]@{ path = $p; identity = (Get-AppIdentity (Get-AppPairPath $target.appDir $p)) } })
-$current = if (Test-Path -LiteralPath (Join-Path $base 'activation.json')) { $null } else { Read-UsageCopyCurrent $ProjectRoot }
+$current = $null
+if (-not (Test-Path -LiteralPath (Join-Path $base 'activation.json'))) {
+    try { $current = Read-UsageCopyCurrent $ProjectRoot -AllowMissingSlot } catch { if (-not $ForceRebuild) { throw } }
+}
 $matches = $null -ne $current -and $current.schemaVersion -eq 2 -and $current.packageFullName -ceq $target.packageFullName -and $current.sourceAppDir -ieq $target.appDir -and $current.revision -ceq $revision -and -not (Test-Path -LiteralPath (Join-Path $base 'activation.json'))
 if ($matches) {
     foreach ($entry in $originals) {
@@ -30,8 +33,10 @@ if ($matches) {
     }
 }
 if ($matches -and -not $ForceRebuild) {
-    Assert-UsageCopyPair $current
-    return [pscustomobject]@{ status = 'reused'; copy = $current }
+    try {
+        Assert-UsageCopyPair $current
+        return [pscustomobject]@{ status = 'reused'; copy = $current }
+    } catch { Write-Host 'The copy needs repair; rebuilding from the installed original.' }
 }
 if (-not $PSCmdlet.ShouldProcess($base, 'Create and verify a new patched copy; keep installed app and user profiles in place')) {
     return [pscustomobject]@{ status = 'planned'; sourceAppDir = $target.appDir; packageFullName = $target.packageFullName; profiles = $profiles }
@@ -39,10 +44,12 @@ if (-not $PSCmdlet.ShouldProcess($base, 'Create and verify a new patched copy; k
 [void][IO.Directory]::CreateDirectory($base)
 $lock = [IO.File]::Open((Join-Path $base 'prepare.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 $build = $null
+$timer = [Diagnostics.Stopwatch]::StartNew()
+$timings = [ordered]@{}
 try {
     if ($StageOnly -and (Test-Path -LiteralPath (Join-Path $base 'activation.json'))) { throw 'Finish or recover the previous activation before staging another copy.' }
     if (-not $StageOnly) { Complete-UsageCopyActivation $ProjectRoot }
-    $current = Read-UsageCopyCurrent $ProjectRoot
+    try { $current = Read-UsageCopyCurrent $ProjectRoot -AllowMissingSlot } catch { if (-not $ForceRebuild) { throw }; $current = $null }
     if ($current -and $current.schemaVersion -eq 1) {
         # During the one-time migration, prefer the actually used legacy build
         # as the previous version. Keep it in place; it may still be running.
@@ -85,14 +92,19 @@ try {
     $build = Join-Path $base 'staging'
     Remove-UsageCopyDirectory $ProjectRoot $build
     [void][IO.Directory]::CreateDirectory($build)
-    Write-Host "Preparing copy: $build"
-    $files = @(Copy-UsageAppTree $target.appDir (Join-Path $build 'app'))
-    Write-AppJson (Join-Path $build 'source-files.json') $files
-    Write-Host "Verified $($files.Count) copied files. Preparing Layer and the usage collector."
-    $environment = & (Join-Path $PSScriptRoot 'Prepare-UsageEnvironment.ps1') -ProjectRoot $ProjectRoot -AppDir $target.appDir -LayerDataRoot (Join-Path $build 'layer-data') -AllowFixture:$AllowFixture -Confirm:$false
+    Write-Host '[1/3] Copying app resources with Windows robocopy.'
+    $timer.Restart()
+    # Generate the patched pair directly from the Store source. Its clean
+    # bytes never need to be copied into this disposable staging directory.
+    $files = @(Copy-UsageAppTree $target.appDir (Join-Path $build 'app') -SkipPatchPair)
+    $timings.copySeconds = [Math]::Round($timer.Elapsed.TotalSeconds,2); $timer.Restart()
+    Write-Host "Copied resources ($($timings.copySeconds)s)."
+    Write-Host '[2/3] Preparing Layer and usage collection.'
+    $environment = & (Join-Path $PSScriptRoot 'Prepare-UsageEnvironment.ps1') -ProjectRoot $ProjectRoot -AppDir $target.appDir -LayerDataRoot (Join-Path $build 'layer-data') -ManagedAppDir (Join-Path $build 'app') -AllowFixture:$AllowFixture -Confirm:$false
     $collectorConfig = Read-AppJson $environment.collectorConfigPath
     $collectorConfig | Add-Member -NotePropertyName managedCopy -NotePropertyValue $true
-    $collectorConfig.codexPath = '../../bin/codex.exe'
+    $collectorConfig | Add-Member -NotePropertyName cliSource -NotePropertyValue 'app'
+    $collectorConfig.codexPath = '../../../app/resources/codex.exe'
     $collectorConfig.workDir = '../../collector-work'
     $collectorConfig.cachePath = 'usage-cache.json'
     Write-AppJson $environment.collectorConfigPath $collectorConfig
@@ -106,31 +118,54 @@ try {
     $previousCache = Join-Path $ProjectRoot '.local/layer-data/tweak-data/local.sidebar-usage-demo/usage-cache.json'
     if ($null -ne $current) { $previousCache = Join-Path $current.layerRoot 'tweak-data/local.sidebar-usage-demo/usage-cache.json' }
     if ([IO.File]::Exists($previousCache)) { [IO.File]::Copy($previousCache, $environment.cachePath, $false) }
-    $patched = & (Join-Path $ProjectRoot 'patcher/Invoke-AppRepatch.ps1') -AppDir (Join-Path $build 'app') -LayerRoot $environment.layerRoot -LayerSourceRoot $environment.layerSourceRoot -OutputDir (Join-Path $build 'patch') -BackupRoot (Join-Path $build 'original-pair') -NodePath $environment.nodePath -AsarModule $environment.asarModule -PortableCopy -Confirm:$false
-    if ($patched.status -cne 'applied') { throw 'Copy patch was not applied.' }
+    $timings.environmentSeconds = [Math]::Round($timer.Elapsed.TotalSeconds,2); $timer.Restart()
+    Write-Host "Prepared usage collection ($($timings.environmentSeconds)s)."
+    Write-Host '[3/3] Patching the new app.'
+    $patched = & (Join-Path $ProjectRoot 'patcher/Build-AppPatch.ps1') -AppDir $target.appDir -LayerRoot $environment.layerRoot -LayerSourceRoot $environment.layerSourceRoot -OutputDir (Join-Path $build 'patch') -NodePath $environment.nodePath -AsarModule $environment.asarModule -PortableCopy -ManagedCopy -Confirm:$false
+    if ($patched.status -cne 'prepared') { throw 'Copy patch was not prepared.' }
+    $manifest = Read-AppPatchManifest $patched.manifestPath
+    foreach ($entry in $manifest.files) {
+        $to = Join-Path (Join-Path $build 'app') $entry.path
+        if ([IO.File]::Exists($to)) { throw 'A patch destination was unexpectedly copied.' }
+        [IO.File]::Move((Get-AppPairPath $patched.patchedAppDir $entry.path),$to)
+    }
+    $manifestPath = Join-Path $build 'patch-manifest.json'
+    [IO.File]::Move($patched.manifestPath,$manifestPath)
+    [IO.File]::Move($patched.reportPath,(Join-Path $build 'repatch-report.json'))
+    foreach ($relative in @('patch/app/resources','patch/app','patch')) { [IO.Directory]::Delete((Join-Path $build $relative),$false) }
     # A concurrent Store update must not publish a build as the current version.
     $latest = Get-UsageTarget $configuration -FixtureAppDir $FixtureAppDir -AllowFixture:$AllowFixture
     if ($AllowFixture) { $latest.packageFullName = $FixtureVersion }
     if ($latest.packageFullName -cne $target.packageFullName -or $latest.appDir -ine $target.appDir) { throw 'Installed version changed during preparation.' }
-    foreach ($entry in $originals) { Assert-AppIdentity (Get-AppPairPath $target.appDir $entry.path) $entry.identity }
+    # The engine checks its source before and after patching. Match that snapshot
+    # to the one taken before copying, without rereading the large ASAR again.
+    foreach ($entry in $originals) {
+        $builtFrom = @($manifest.files | Where-Object path -CEQ $entry.path)
+        if ($builtFrom.Count -ne 1 -or -not (Test-AppIdentity $entry.identity $builtFrom[0].original)) { throw 'Installed source changed between copying and patching.' }
+    }
     if ((Get-UsageCopyRevision $ProjectRoot $configuration.value) -cne $revision) { throw 'Project sources changed during preparation. Run preparation again.' }
-    $manifest = Read-AppPatchManifest $patched.manifestPath
+    $timings.patchSeconds = [Math]::Round($timer.Elapsed.TotalSeconds,2)
     $receipt = [pscustomobject]@{
-        schemaVersion = 2; generation = $id; kind = 'usage-shared-profile-copy'; preparedAt = [DateTime]::UtcNow.ToString('o')
+        schemaVersion = 2; storagePolicy = 'single-copy'; generation = $id; kind = 'usage-shared-profile-copy'; preparedAt = [DateTime]::UtcNow.ToString('o')
         buildDir = $build; appDir = (Join-Path $build 'app'); layerRoot = $environment.layerRoot
         sourceAppDir = $target.appDir; packageFullName = $target.packageFullName; revision = $revision
         profiles = $profiles; originals = $originals; sourceFileCount = $files.Count
         patched = @($manifest.files | ForEach-Object { [pscustomobject]@{ path = $_.path; identity = $_.patched } })
-        manifestPath = $patched.manifestPath; backupDir = $patched.backupDir
+        manifestPath = $manifestPath; backupDir = $null; timings = $timings
     }
-    Assert-UsageCopyPair $receipt
     Write-AppJson (Join-Path $build 'copy.json') $receipt -CreateNew
-    if ($StageOnly) { return [pscustomobject]@{ status='staged'; copy=$receipt } }
+    if ($StageOnly) { Assert-UsageCopyPair $receipt; return [pscustomobject]@{ status='staged'; copy=$receipt } }
+    $timer.Restart()
     $active = Publish-UsageCopy $ProjectRoot $receipt $current
+    Write-Host "Patched ($($timings.patchSeconds)s), activated and cleaned up ($([Math]::Round($timer.Elapsed.TotalSeconds,2))s)."
     return [pscustomobject]@{ status = 'prepared'; copy = $active }
 }
 catch {
+    $failure = $_
     Write-AppJson (Join-Path $base 'last-prepare-error.json') ([pscustomobject]@{ at = [DateTime]::UtcNow.ToString('o'); error = $_.Exception.Message; location = $_.ScriptStackTrace })
-    throw
+    if ($build -and -not (Test-Path -LiteralPath (Join-Path $base 'activation.json'))) {
+        try { Remove-UsageCopyDirectory $ProjectRoot $build } catch { Write-Warning 'Temporary staging files could not be removed; the next preparation will retry cleanup.' }
+    }
+    throw $failure
 }
 finally { $lock.Dispose() }

@@ -52,12 +52,23 @@ try {
     # Read the upstream assets; never run Layer's installer against the Store app.
     $source = Assert-AppPlainPath (Join-Path $local 'layer-source') -AllowMissing
     $runtimeOut = Assert-AppPlainPath (Join-Path $local 'layer-runtime') -AllowMissing
-    foreach ($p in @($source, $runtimeOut, (Join-Path $source 'assets'))) { [void][IO.Directory]::CreateDirectory($p) }
-    foreach ($name in @('package.json','LICENSE')) { [IO.File]::Copy((Join-Path $layer $name),(Join-Path $source $name),$true) }
-    [IO.File]::Copy((Join-Path $layer 'assets/loader.cjs'),(Join-Path $source 'assets/loader.cjs'),$true)
-    Get-ChildItem -LiteralPath (Join-Path $layer 'assets/runtime') -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtimeOut -Recurse -Force }
-    [IO.File]::Copy((Join-Path $layer 'LICENSE'),(Join-Path $runtimeOut 'LICENSE'),$true)
-    & $node (Join-Path $PSScriptRoot 'patch-layer-runtime.cjs') --runtime-root $runtimeOut --check | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Unsupported Layer runtime assets.' }
+    $assetsReceipt = Join-Path $dependencies 'prepared-layer.sha256'
+    $assetsRevision = $expected + ':' + (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patch-layer-runtime.cjs')).Hash
+    $reuseAssets = $reusable -and [IO.File]::Exists($assetsReceipt) -and [IO.File]::ReadAllText($assetsReceipt) -ceq $assetsRevision
+    foreach ($required in @((Join-Path $source 'assets/loader.cjs'),(Join-Path $source 'package.json'),(Join-Path $source 'LICENSE'),(Join-Path $runtimeOut 'main.js'),(Join-Path $runtimeOut 'runtime-paths.js'),(Join-Path $runtimeOut 'preload.js'),(Join-Path $runtimeOut 'guest-preload.js'),(Join-Path $runtimeOut 'LICENSE'))) {
+        if (-not [IO.File]::Exists($required)) { $reuseAssets = $false }
+    }
+    if (-not $reuseAssets) {
+        foreach ($p in @($source, $runtimeOut, (Join-Path $source 'assets'))) { [void][IO.Directory]::CreateDirectory($p) }
+        foreach ($name in @('package.json','LICENSE')) { [IO.File]::Copy((Join-Path $layer $name),(Join-Path $source $name),$true) }
+        [IO.File]::Copy((Join-Path $layer 'assets/loader.cjs'),(Join-Path $source 'assets/loader.cjs'),$true)
+        Get-ChildItem -LiteralPath (Join-Path $layer 'assets/runtime') -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtimeOut -Recurse -Force }
+        [IO.File]::Copy((Join-Path $layer 'LICENSE'),(Join-Path $runtimeOut 'LICENSE'),$true)
+        & $node (Join-Path $PSScriptRoot 'patch-layer-runtime.cjs') --runtime-root $runtimeOut --check | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unsupported Layer runtime assets.' }
+        [IO.File]::WriteAllText($assetsReceipt,$assetsRevision)
+    } else { Write-Host 'Reusing prepared Layer assets.' }
+    $download = Assert-AppPlainPath (Join-Path $tools ($runtime.directory + '.zip')) -AllowMissing
+    if ([IO.File]::Exists($download)) { [IO.File]::Delete($download) }
     [pscustomobject]@{ nodePath=$node; layerSource=$source; runtimeSource=$runtimeOut; asarModule=$asar }
 } finally { $lock.Dispose() }

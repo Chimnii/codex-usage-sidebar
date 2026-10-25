@@ -59,20 +59,19 @@ try {
     if ($installed.Count -eq 1) { $report.installedVersion = Get-PackageVersion $installed[0].PackageFullName }
 } catch { }
 $current = $null
-$rollbackSupported = $false
 foreach ($slot in @('current','previous')) {
     $key = if ($slot -eq 'current') { 'copyIntegrity' } else { 'rollbackIntegrity' }
     try {
         $copy = Read-UsageCopyCurrent $project $slot -AllowMissingSlot
         if (-not $copy) { continue }
         if ($slot -eq 'current') { $current = $copy; $report.copyVersion = Get-PackageVersion $copy.packageFullName }
-        else { $rollbackSupported = $copy.schemaVersion -eq 2 }
         if (-not [IO.Directory]::Exists($copy.appDir)) { $report[$key]='missing'; continue }
         Assert-UsageCopyPair $copy
         $report[$key]='verified'
     } catch { $report[$key]='invalid' }
 }
-$report.repairAvailable = $report.rollbackIntegrity -eq 'verified' -and $rollbackSupported
+$report.repairAvailable = $settings -and $null -ne $report.installedVersion
+$report.repairMethod = 'rebuild-from-installed-app'
 if ($report.installedVersion -and $report.copyVersion) { $report.localUpdateRequired = $report.installedVersion -ne $report.copyVersion }
 if ($current) {
     try { $report.runningCopy = @(Get-UsageCopyBlockers | Where-Object ExecutablePath -IEQ (Join-Path $current.appDir 'ChatGPT.exe')).Count -gt 0 } catch { }

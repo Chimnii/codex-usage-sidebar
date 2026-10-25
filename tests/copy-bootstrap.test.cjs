@@ -32,6 +32,8 @@ for (const slot of ['staging', 'active', 'previous']) {
     const configPath = path.join(root, 'layer-data/tweak-data/local.sidebar-usage-demo/collector-config.json');
     const config = resolveConfig({ managedCopy: true, codexHome: environment.CODEX_HOME }, configPath);
     assert.equal(config.codexPath, path.join(root, 'layer-data/bin/codex.exe'));
+    const modern = resolveConfig({ managedCopy: true, cliSource: 'app' }, path.join(root, 'layer-data/tweak-data/local.sidebar-usage-demo/collector-config.json'));
+    assert.equal(modern.codexPath, path.join(root, 'app/resources/codex.exe'));
     assert.equal(config.workDir, path.join(root, 'layer-data/collector-work'));
     assert.equal(config.codexHome, environment.CODEX_HOME);
   });

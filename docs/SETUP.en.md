@@ -4,7 +4,11 @@
 2. Keep this project in a permanent folder. Fully quit the app and run **Setup.cmd**.
 3. Launch **ChatGPT with usage** from the Start menu. Right-click the shortcut and choose **Pin to taskbar** once. Later Setup runs update existing pins pointing to this copy, regardless of their filename.
 
+Setup.cmd keeps the success or failure result visible until you press a key.
+
 Initial setup needs internet access. It verifies and installs a private Node runtime and pinned dependencies under `.local`; system Node and PATH are unchanged.
+The tested app needs about 2.4 GiB of additional persistent storage. Updates also need temporary space for the new copy.
+Windows robocopy copies ordinary resources; inventory/size checks detect missing files. Modified EXE/ASAR files are checked separately, and collection reuses the app's Codex CLI.
 Setup prepares this private environment once even if the app previously used another Node or a development environment.
 Later runs reuse the matching Node version and libraries. Libraries are reinstalled only when the lock file changes or required files are missing; existing provider settings are preserved.
 Use one app at a time: the copy and original share login, conversations, and settings.
@@ -17,7 +21,7 @@ After changing the Windows theme, run `scripts/Install-UsageShortcut.ps1 -Update
 | Setup.cmd | Install, apply settings/source changes, and create the shortcut |
 | Launch.cmd | Verify/prepare the copy and launch it; normally use the Start menu shortcut |
 | Update.cmd | Check/update the Store original, repatch the copy, and launch |
-| Restore.cmd | Restore the previous copy; does not roll back conversations or settings |
+| Restore.cmd | Rebuild from the installed Store original; preserve conversations and settings |
 | Doctor.cmd | Read-only version, usage, UI, update, and recovery diagnostics |
 | Uninstall.cmd | Remove the managed copy and shortcuts; retain the original, profile, and project sources |
 
@@ -42,7 +46,9 @@ After editing settings, close the app and run Setup.cmd. Do not share the settin
 - Store checks run every six hours; Help → Check for updates checks immediately. Failed checks retry after one hour.
 - Startup also compares the installed original with the copy. An already updated original can be repatched even if Store queries fail.
 - The in-app update action waits for normal app exit. Finish your work and fully quit the app.
-- Restore.cmd keeps the restored version until the next Setup.cmd or Update.cmd. If active files are damaged, a verified previous copy can still be restored; one damaged copy is retained under `.local/copy/damaged` until the next repair.
+- Only one app copy is retained. During an update the old copy survives until the swap completes, then it is removed.
+- Restore.cmd rebuilds damaged or missing copies from the installed original. It does not downgrade the app. Use the Store original if a new app version is incompatible with the patch.
+- Older installations' previous backups and duplicate patch files are removed after the next successful Setup or update.
 - To update this project's source, replace source files in the same folder and run Setup.cmd. Project sources are not downloaded automatically.
 - Run Doctor.cmd for diagnostics. `powershell -NoProfile -File scripts/Doctor.ps1 -Json` produces a sanitized report; do not share raw settings or logs.
 - If needed, quit the copy and return to the original Store app. You may also update the original manually and run Setup.cmd.

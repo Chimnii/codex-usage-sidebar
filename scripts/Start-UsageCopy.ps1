@@ -27,7 +27,7 @@ try {
         finally { $recoveryLock.Dispose() }
     }
     $holdPath = Join-Path $base 'restore-hold.json'
-    $selected = Read-UsageCopyCurrent $configuration.root
+    $selected = Read-UsageCopyCurrent $configuration.root -AllowMissingSlot
     $held = $false
     if (-not $Refresh -and $selected -and [IO.File]::Exists($holdPath)) {
         $held = (Read-AppJson $holdPath).generation -ceq $selected.generation

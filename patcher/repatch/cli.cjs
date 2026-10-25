@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 const { inspect, prepare } = require('./engine.cjs');
-const names = { '--original-app-dir': 'originalAppDir', '--layer-root': 'layerRoot', '--layer-source-root': 'layerSourceRoot', '--output-app-dir': 'outputAppDir', '--asar-module': 'asarModule', '--portable-copy': 'portableCopy' };
+const names = { '--original-app-dir': 'originalAppDir', '--layer-root': 'layerRoot', '--layer-source-root': 'layerSourceRoot', '--output-app-dir': 'outputAppDir', '--asar-module': 'asarModule', '--portable-copy': 'portableCopy', '--managed-copy': 'managedCopy' };
 async function main(args) {
   const mode = args.shift(), options = {};
   if (!['inspect', 'prepare'].includes(mode)) throw Error('Usage: cli.cjs inspect|prepare --original-app-dir PATH --layer-root PATH --layer-source-root PATH [--asar-module PATH] [--output-app-dir NEW_PATH]');

@@ -44,7 +44,7 @@ try {
             Start-Sleep -Seconds 2
         }
     }
-    $current = Read-UsageCopyCurrent $configuration.root
+    $current = Read-UsageCopyCurrent $configuration.root -AllowMissingSlot
     $copyPackage = if ($current) { [string]$current.packageFullName } else { '' }
     $getTarget = { Get-UsageTarget $configuration }
     $check = { param($target) Get-UsageStoreStatus $target $copyPackage }

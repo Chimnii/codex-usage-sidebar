@@ -66,29 +66,25 @@ function Get-UsageCopyRevision {
 }
 
 function Copy-UsageAppTree {
-    param([string]$Source, [string]$Destination)
+    param([string]$Source, [string]$Destination, [switch]$SkipPatchPair)
     $sourceRoot = Get-AppDirectory $Source
     $destinationRoot = Assert-AppPlainPath $Destination -AllowMissing
     Assert-AppSeparatePaths $sourceRoot $destinationRoot
     if (Test-Path -LiteralPath $destinationRoot) { throw 'Copy destination must be new.' }
     $entries = @(Get-UsageCopyTree $sourceRoot -IncludeDirectories | Sort-Object path)
     [void][IO.Directory]::CreateDirectory($destinationRoot)
-    $receipt = New-Object 'Collections.Generic.List[object]'
-    foreach ($entry in $entries) {
-        $from = Join-Path $sourceRoot $entry.path
-        $to = Join-Path $destinationRoot $entry.path
-        if ($entry.isDirectory) { [void][IO.Directory]::CreateDirectory($to); continue }
-        # Copy bytes into a user-owned directory, never the Store file permissions.
-        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
-        $before = Get-AppIdentity $from
-        [IO.File]::Copy($from, $to, $false)
-        $copied = Get-AppIdentity $to
-        if (-not (Test-AppIdentity $copied $before)) { throw "Copy verification failed: $($entry.path)" }
-        $receipt.Add([pscustomobject]@{ path = $entry.path; sha256 = $copied.sha256; length = $copied.length })
-    }
+    # DAT copies bytes/attributes/timestamps, never the Store ACL or owner.
+    $arguments = @($sourceRoot, $destinationRoot, '/E', '/COPY:DAT', '/DCOPY:DAT', '/R:0', '/W:0', '/MT:8', '/XJ', '/NP', '/NFL', '/NDL', '/NJH', '/NJS')
+    if ($SkipPatchPair) { $arguments += @('/XF', (Join-Path $sourceRoot 'ChatGPT.exe'), (Join-Path $sourceRoot 'resources/app.asar')) }
+    $log = & (Join-Path $env:SystemRoot 'System32/robocopy.exe') @arguments 2>&1
+    $code = $LASTEXITCODE
+    if ($code -ge 8) { throw "App copy failed (robocopy $code). $($log -join ' ')" }
     $after = @(Get-UsageCopyTree $sourceRoot -IncludeDirectories | Sort-Object path)
     if (($entries | ConvertTo-Json -Compress) -cne ($after | ConvertTo-Json -Compress)) { throw 'Installed app changed while copying. Retry after its update finishes.' }
-    return $receipt.ToArray()
+    $expected = @($entries | Where-Object { -not $SkipPatchPair -or $_.path -notin @('ChatGPT.exe','resources/app.asar') } | Select-Object path,isDirectory,length)
+    $copied = @(Get-UsageCopyTree $destinationRoot -IncludeDirectories | Sort-Object path | Select-Object path,isDirectory,length)
+    if (($expected | ConvertTo-Json -Compress) -cne ($copied | ConvertTo-Json -Compress)) { throw 'Copy verification failed: file inventory or lengths differ.' }
+    return @($entries | Where-Object { -not $_.isDirectory } | Select-Object path,length)
 }
 
 function Read-UsageCopyCurrent {
@@ -117,6 +113,7 @@ function Convert-UsageCopyLocation {
     $value = $Copy | ConvertTo-Json -Depth 16 | ConvertFrom-Json
     $old = [string]$value.buildDir
     foreach ($key in @('appDir','layerRoot','manifestPath','backupDir')) {
+        if (-not $value.PSObject.Properties[$key] -or [string]::IsNullOrWhiteSpace([string]$value.$key)) { continue }
         if (-not (Test-AppPathInside $value.$key $old)) { throw "Invalid copy receipt path: $key" }
         $value.$key = Join-Path $Root $value.$key.Substring($old.Length + 1)
     }
@@ -129,7 +126,7 @@ function Remove-UsageCopyDirectory {
     $base = Get-AppFullPath (Join-Path $ProjectRoot '.local/copy')
     $full = Assert-AppPlainPath $Path -AllowMissing
     $parent = Split-Path $full -Parent
-    if (($full -in @((Join-Path $base 'staging'),(Join-Path $base 'retired'),(Join-Path $base 'damaged'))) -or $parent -ieq (Join-Path $base 'builds')) {
+    if (($full -in @((Join-Path $base 'staging'),(Join-Path $base 'retired'),(Join-Path $base 'damaged'),(Join-Path $base 'previous'))) -or $parent -ieq (Join-Path $base 'builds')) {
         if (-not (Test-Path -LiteralPath $full)) { return }
         # Validate all descendants and the resolved boundary before recursive deletion.
         $null = @(Get-UsageCopyTree $full)
@@ -154,16 +151,28 @@ function Invoke-UsageCopyCleanup {
     param([string]$ProjectRoot)
     $base = Join-Path $ProjectRoot '.local/copy'
     $keep = @()
-    foreach ($name in @('current','previous')) { $c = Read-UsageCopyCurrent $ProjectRoot $name; if ($c) { $keep += $c.buildDir } }
+    if (Test-Path -LiteralPath (Join-Path $base 'activation.json')) { return }
+    $current = Read-UsageCopyCurrent $ProjectRoot
+    $single = $current -and (Get-UsageCopyProperty $current 'storagePolicy') -ceq 'single-copy'
+    foreach ($name in @('current','previous')) {
+        if ($single -and $name -eq 'previous') { continue }
+        $c = Read-UsageCopyCurrent $ProjectRoot $name
+        if ($c) { $keep += $c.buildDir }
+    }
     $candidates = @()
     $builds = Join-Path $base 'builds'
     if (Test-Path -LiteralPath $builds) { $candidates += @(Get-ChildItem -LiteralPath $builds -Directory -Force | Select-Object -ExpandProperty FullName) }
     $candidates += (Join-Path $base 'retired')
+    if ($single) { $candidates += @((Join-Path $base 'previous'),(Join-Path $base 'damaged')) }
     $deferred = @()
     foreach ($path in $candidates) {
         if ($path -in $keep) { continue }
         try { Remove-UsageCopyDirectory $ProjectRoot $path }
         catch { $deferred += [pscustomobject]@{ path=$path; reason=$_.Exception.Message } }
+    }
+    if ($single -and -not [IO.Directory]::Exists((Join-Path $base 'previous'))) {
+        $pointer = Assert-AppPlainPath (Join-Path $base 'previous.json') -AllowMissing
+        if ([IO.File]::Exists($pointer)) { [IO.File]::Delete($pointer) }
     }
     Write-AppJson (Join-Path $base 'cleanup.json') ([pscustomobject]@{ at=[DateTime]::UtcNow.ToString('o'); deferred=$deferred })
 }
@@ -174,6 +183,10 @@ function Complete-UsageCopyActivation {
     $journalPath = Join-Path $base 'activation.json'
     if (-not [IO.File]::Exists($journalPath)) { return }
     $journal = Read-AppJson $journalPath
+    if ((Get-UsageCopyProperty $journal 'operation') -ceq 'replace') {
+        Complete-UsageCopyReplacement $ProjectRoot $journal
+        return
+    }
     if ($journal.PSObject.Properties['operation'] -and $journal.operation -ceq 'repair') {
         Complete-UsageCopyRepair $ProjectRoot $journal
         return
@@ -288,24 +301,74 @@ function Remove-UsageCopyOldLaunchReports {
     }
 }
 
+function Complete-UsageCopyReplacement {
+    param([string]$ProjectRoot, $Journal)
+    $base = Join-Path $ProjectRoot '.local/copy'
+    $active = Assert-AppPlainPath (Join-Path $base 'active') -AllowMissing
+    $stage = Assert-AppPlainPath (Join-Path $base 'staging') -AllowMissing
+    $retired = Assert-AppPlainPath (Join-Path $base 'retired') -AllowMissing
+    if ($Journal.next.schemaVersion -ne 2 -or $Journal.next.buildDir -ine $stage -or $Journal.next.appDir -ine (Join-Path $stage 'app') -or
+        $Journal.next.layerRoot -ine (Join-Path $stage 'layer-data') -or $Journal.next.kind -cne 'usage-shared-profile-copy') { throw 'Invalid replacement journal.' }
+    foreach ($slot in @($active,$stage,$retired)) { Assert-UsageCopySlotStopped $slot }
+    $installed = $null
+    try { $installed = Read-AppJson (Join-Path $active 'copy.json') } catch { }
+    $failure = $null
+    if ($installed -and (Get-UsageCopyProperty $installed 'generation') -ceq $Journal.next.generation) {
+        $next = Convert-UsageCopyLocation $Journal.next $active
+        try { Assert-UsageCopyPair $next } catch { $failure = $_ }
+        if (-not $failure) {
+            Write-AppJson (Join-Path $active 'copy.json') $next
+            Write-AppJson (Join-Path $base 'current.json') $next
+            # Commit before cleanup. A crash after this point only leaves a
+            # disposable retired directory; startup maintenance can remove it.
+            [IO.File]::Delete((Join-Path $base 'activation.json'))
+            Invoke-UsageCopyCleanup $ProjectRoot
+            return
+        }
+        if ([IO.Directory]::Exists($stage)) { throw 'Cannot quarantine the rejected replacement: staging already exists.' }
+        [IO.Directory]::Move($active,$stage)
+    }
+    # A failed/incomplete swap returns the existing bytes, even when repairing
+    # a damaged app. The untouched Store installation remains the repair source.
+    if ([IO.Directory]::Exists($active) -and ([IO.Directory]::Exists($retired) -or
+        (-not $Journal.old -and -not [IO.Directory]::Exists($stage)))) {
+        if ([IO.Directory]::Exists($stage)) { throw 'Ambiguous interrupted replacement; retaining all slots for recovery.' }
+        [IO.Directory]::Move($active,$stage)
+        $failure = 'Replacement receipt is missing or invalid; the replacement was rejected.'
+    }
+    if (-not [IO.Directory]::Exists($active) -and [IO.Directory]::Exists($retired)) {
+        [IO.Directory]::Move($retired,$active)
+    }
+    if ($Journal.old -and [IO.Directory]::Exists($active)) {
+        $old = Convert-UsageCopyLocation $Journal.old $active
+        Write-AppJson (Join-Path $active 'copy.json') $old
+        Write-AppJson (Join-Path $base 'current.json') $old
+    }
+    [IO.File]::Delete((Join-Path $base 'activation.json'))
+    if ($failure) { throw $failure }
+}
+
 function Publish-UsageCopy {
     param([string]$ProjectRoot, $Copy, $Old)
     $base = Join-Path $ProjectRoot '.local/copy'
     $active = Assert-AppPlainPath (Join-Path $base 'active') -AllowMissing
-    $previous = Assert-AppPlainPath (Join-Path $base 'previous') -AllowMissing
     $retired = Assert-AppPlainPath (Join-Path $base 'retired') -AllowMissing
     $stage = Assert-AppPlainPath (Join-Path $base 'staging')
     if ($Copy.buildDir -ine $stage) { throw 'Only the verified staging slot can be activated.' }
-    Assert-UsageCopyPair $Copy
     Assert-UsageCopySlotStopped $active
-    if ($Old -and $Old.schemaVersion -eq 2) { Assert-UsageCopyPair $Old }
     Remove-UsageCopyDirectory $ProjectRoot $retired
-    Write-AppJson (Join-Path $base 'activation.json') ([pscustomobject]@{ old=$Old; next=$Copy })
-    if ([IO.Directory]::Exists($previous)) { Assert-UsageCopySlotStopped $previous; Move-Item -LiteralPath $previous -Destination $retired }
-    if ([IO.Directory]::Exists($active)) { Move-Item -LiteralPath $active -Destination $previous }
-    Move-Item -LiteralPath $stage -Destination $active
-    Complete-UsageCopyActivation $ProjectRoot
-    Invoke-UsageCopyCleanup $ProjectRoot
+    Write-AppJson (Join-Path $base 'activation.json') ([pscustomobject]@{ operation='replace'; old=$Old; next=$Copy })
+    try {
+        # Directory.Move is a same-volume rename. Move-Item can partially move
+        # children on a sharing violation, particularly in PowerShell 7.
+        if ([IO.Directory]::Exists($active)) { [IO.Directory]::Move($active,$retired) }
+        [IO.Directory]::Move($stage,$active)
+        Complete-UsageCopyActivation $ProjectRoot
+    } catch {
+        $failure = $_
+        try { Complete-UsageCopyActivation $ProjectRoot } catch { }
+        throw $failure
+    }
     return Read-UsageCopyCurrent $ProjectRoot
 }
 

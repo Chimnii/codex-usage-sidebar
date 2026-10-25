@@ -65,6 +65,7 @@ function resolveAsar(options) {
 
 async function preflight(input) {
   if (Number(process.versions.node.split('.')[0]) < 20) throw Error('Node.js 20 or newer required');
+  if (input.managedCopy && !((input.managedCopy === true || input.managedCopy === 'true') && (input.portableCopy === true || input.portableCopy === 'true'))) throw Error('Managed preparation requires portable-copy mode');
   const options = {
     ...input,
     originalAppDir: safePath(input.originalAppDir, 'directory'),
@@ -172,7 +173,7 @@ async function prepare(input) {
   const { options, dependency, archive, exe, pe, replacements, report, asarPath, exePath } = context;
   // Recheck original bytes immediately before output construction. Nothing in
   // this engine writes into the input or runtime paths.
-  if (await hashFile(asarPath) !== report.files[0].original.sha256 || await hashFile(exePath) !== report.files[1].original.sha256) throw Error('Input pair changed during preflight');
+  if (!options.managedCopy && (await hashFile(asarPath) !== report.files[0].original.sha256 || await hashFile(exePath) !== report.files[1].original.sha256)) throw Error('Input pair changed during preflight');
   const output = options.outputAppDir, outputAsar = path.join(output, 'resources', 'app.asar'), outputExe = path.join(output, 'ChatGPT.exe');
   fs.mkdirSync(output);
   fs.mkdirSync(path.join(output, 'resources'));
@@ -190,13 +191,19 @@ async function prepare(input) {
       const outputEntry = checkMembers.get(entry.path);
       if (!outputEntry || JSON.stringify(outputEntry.node) !== JSON.stringify(entry.node)) throw Error(`Unrelated ASAR metadata changed: ${entry.path}`);
     }
-    const oldPayloadHash = archive.payloadLength ? await hashFile(asarPath, archive.dataOffset, archive.size - 1) : sha(Buffer.alloc(0));
-    const newPayloadHash = archive.payloadLength ? await hashFile(outputAsar, check.dataOffset, check.dataOffset + archive.payloadLength - 1) : sha(Buffer.alloc(0));
-    if (oldPayloadHash !== newPayloadHash) throw Error('Original ASAR payload preservation failed');
+    // Managed staging trusts the completed OS stream copy. Validate changed
+    // members and metadata above, the source snapshot and final output below.
+    // Standalone pair tools retain their stronger payload audit.
+    if (!options.managedCopy) {
+      const oldPayloadHash = archive.payloadLength ? await hashFile(asarPath, archive.dataOffset, archive.size - 1) : sha(Buffer.alloc(0));
+      const newPayloadHash = archive.payloadLength ? await hashFile(outputAsar, check.dataOffset, check.dataOffset + archive.payloadLength - 1) : sha(Buffer.alloc(0));
+      if (oldPayloadHash !== newPayloadHash) throw Error('Original ASAR payload preservation failed');
+      report.archive.originalPayloadSha256 = oldPayloadHash;
+    }
     if (await hashFile(asarPath) !== report.files[0].original.sha256 || await hashFile(exePath) !== report.files[1].original.sha256) throw Error('Input pair changed during build; generated output cannot be applied');
     report.status = 'prepared'; report.outputAppDir = output;
     report.archive.patchedHeaderSha256 = built.headerHash;
-    report.archive.originalPayloadSha256 = oldPayloadHash;
+    report.archive.payloadVerification = options.managedCopy ? 'stream-copy-and-member-validation' : 'sha256';
     report.archive.originalPayloadPreserved = true;
     report.files[0].patched = { sha256: await hashFile(outputAsar), length: fs.statSync(outputAsar).size };
     report.files[1].patched = { sha256: sha(newExe), length: newExe.length };

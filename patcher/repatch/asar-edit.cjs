@@ -109,7 +109,7 @@ async function rebuild(archive, replacements, output) {
   }
   const encoded = makeHeader(header);
   fs.writeFileSync(output, encoded.buffer, { flag: 'wx' });
-  if (archive.payloadLength) await pipeline(fs.createReadStream(archive.file, { start: archive.dataOffset }), fs.createWriteStream(output, { flags: 'a' }));
+  if (archive.payloadLength) await pipeline(fs.createReadStream(archive.file, { start: archive.dataOffset, highWaterMark: 1024 * 1024 }), fs.createWriteStream(output, { flags: 'a', highWaterMark: 1024 * 1024 }));
   for (const data of replacements.values()) fs.appendFileSync(output, data);
   const fd = fs.openSync(output, 'r+'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   return { headerHash: encoded.headerHash, header, dataOffset: encoded.buffer.length };
@@ -117,7 +117,7 @@ async function rebuild(archive, replacements, output) {
 
 async function hashFile(file, start, end) {
   const hash = crypto.createHash('sha256');
-  for await (const chunk of fs.createReadStream(file, start === undefined ? {} : { start, end })) hash.update(chunk);
+  for await (const chunk of fs.createReadStream(file, { highWaterMark: 1024 * 1024, ...(start === undefined ? {} : { start, end }) })) hash.update(chunk);
   return hash.digest('hex');
 }
 
