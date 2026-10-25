@@ -15,7 +15,9 @@ Layer and ASAR are downloaded at setup using package-lock.json; packages retain
 their own licenses and transitive dependency notices. Layer's installer is not executed.
 
 Local Layer changes: scripts/patch-layer-runtime.cjs makes configuration lookup
-respect CODEX_HOME. It checks the version and records before/after hashes.
+respect CODEX_HOME and disables automatic MCP synchronization into the shared user
+configuration, which this sidebar does not use. It checks the version and exact
+hooks and records before/after hashes.
 The repatcher loads the upstream Layer loader into a copy created on the user's machine.
 
 Setup downloads the official Node.js Windows archive specified in runtime.lock.json.

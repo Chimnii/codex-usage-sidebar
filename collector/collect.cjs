@@ -24,11 +24,11 @@ async function main() {
   let snapshot;
   try {
     const args = process.argv.slice(2);
-    if (args.length !== 2 || args[0] !== '--config') throw new Error('config');
+    if ((args.length !== 2 && !(args.length === 3 && args[2] === '--refresh')) || args[0] !== '--config') throw new Error('config');
     const stat = fs.statSync(args[1]);
     if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('config');
     const config = require('./config.cjs').resolveConfig(JSON.parse(fs.readFileSync(args[1], 'utf8').replace(/^\uFEFF/, '')), args[1]);
-    snapshot = await collect(config, { signal: controller.signal });
+    snapshot = await collect(config, { signal: controller.signal, forceRefresh: args[2] === '--refresh' });
   } catch { snapshot = failedSnapshot(); }
   finally {
     signals.forEach((name) => process.removeListener(name, cancel));

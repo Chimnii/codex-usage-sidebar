@@ -25,6 +25,7 @@ if ([IO.File]::Exists($file)) {
         nodePath=$environment.nodePath; agyPath=$null; codexHome=$homePath
         userProfile=$env:USERPROFILE; appData=$env:APPDATA; localAppData=$env:LOCALAPPDATA
         userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; claudeEnabled=$false
+        usage=[pscustomobject]@{language='auto'}
     }
     $candidate = Join-Path $env:LOCALAPPDATA 'agy/bin/agy.exe'
     if ([IO.File]::Exists($candidate)) { $settings.agyPath = $candidate }

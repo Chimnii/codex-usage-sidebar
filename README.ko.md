@@ -9,6 +9,8 @@ Codex Windows 앱 사이드바에 GPT, Antigravity Gemini·Argon, Claude 사용�
 - 작업표시줄 바로가기, Store 업데이트 확인 및 복사본 재패치
 - Antigravity·Claude는 선택 사항이며 GPT만으로 사용 가능
 
+끈 제공자는 숨깁니다. 패널에 마우스나 키보드 포커스를 두면 새로고침할 수 있으며, 표시 순서·언어·갱신 주기를 설정할 수 있습니다.
+
 ## 동작 방식
 
 `app.asar`에 [ChatGPT Layer](https://github.com/LightHaru/chatgpt-layer)를 주입하고 EXE의 ASAR 무결성 해시를 갱신합니다.
@@ -23,7 +25,9 @@ Windows x64에서 Microsoft Store 원본 앱을 설치하고 한 번 로그인�
 설치 후 시작 메뉴의 **Codex Usage Sidebar**를 실행하고 작업표시줄에 고정하면 됩니다.
 업데이트는 앱의 **도움말 → 업데이트 확인** 또는 하단 업데이트 버튼으로 확인·진행합니다.
 
-[설정·복구 가이드](docs/SETUP.md) · [구조·개발](docs/DEVELOPMENT.md)
+[설정·복구 가이드](docs/SETUP.md) · [표시 옵션](docs/OPTIONS.md) · [호환성](docs/COMPATIBILITY.md)
+
+**Doctor.cmd**로 앱을 변경하지 않고 상태를 진단할 수 있습니다. [구조·개발](docs/DEVELOPMENT.md).
 
 앱 바이너리와 계정 정보는 배포하지 않습니다. 복사본은 원본과 사용자 데이터를 공유합니다.
 OpenAI 공식 제품이나 승인된 플러그인이 아니며, 앱 수정에는 서비스 이용 조건이 별도로 적용됩니다.

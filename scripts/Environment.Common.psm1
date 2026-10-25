@@ -26,6 +26,9 @@ function Get-UsageTarget {
     }
     if ($AllowFixture) { throw '-AllowFixture requires -FixtureAppDir for installation.' }
     if ($Configuration.value.packageName -cne 'OpenAI.Codex' -or $Configuration.value.packageFamilyName -cne 'OpenAI.Codex_2p2nqsd0c76g0') { throw 'Local settings must identify the expected OpenAI.Codex package.' }
+    # Appx requires Windows PowerShell; PowerShell 7 provides its built-in
+    # compatibility session. Fixture-only tests never need this OS module.
+    if ($PSVersionTable.PSEdition -eq 'Core') { Import-Module Appx -UseWindowsPowerShell -WarningAction SilentlyContinue -ErrorAction Stop }
     $packages = @(Get-AppxPackage -Name $Configuration.value.packageName -ErrorAction Stop | Where-Object { $_.PackageFamilyName -ceq $Configuration.value.packageFamilyName })
     if ($packages.Count -ne 1) { throw "Expected one installed OpenAI.Codex package for this user; found $($packages.Count)." }
     $package = $packages[0]

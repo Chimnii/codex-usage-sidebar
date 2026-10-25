@@ -1,6 +1,6 @@
 {
   "name": "codex-usage-sidebar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Local usage sidebar and managed updates for the Codex Windows desktop app",
   "license": "MIT",

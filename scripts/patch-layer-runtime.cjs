@@ -2,8 +2,8 @@
 
 // Local compatibility correction for ChatGPT Layer v1.1.4 (MIT, Copyright 2026 Bennett).
 // Upstream: https://github.com/LightHaru/chatgpt-layer/tree/v1.1.4
-// Source equivalent: packages/runtime/src/runtime-paths.ts, CODEX_CONFIG_FILE.
-// Prefer an explicit CODEX_HOME; keep the original homedir fallback. No MCP behavior changes.
+// Source equivalents: runtime-paths.ts and tweak-main-host.ts.
+// Respect CODEX_HOME and disable the unused MCP sync into the shared profile.
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -24,28 +24,41 @@ function prepare(runtimeRoot) {
   const variants = [
     {
       name: 'main.js',
-      before: 'var CODEX_CONFIG_FILE = (0, import_node_path6.join)((0, import_node_os2.homedir)(), ".codex", "config.toml");',
-      after: 'var CODEX_CONFIG_FILE = (0, import_node_path6.join)(process.env.CODEX_HOME || (0, import_node_path6.join)((0, import_node_os2.homedir)(), ".codex"), "config.toml");',
+      edits: [
+        {
+          before: 'var CODEX_CONFIG_FILE = (0, import_node_path6.join)((0, import_node_os2.homedir)(), ".codex", "config.toml");',
+          after: 'var CODEX_CONFIG_FILE = (0, import_node_path6.join)(process.env.CODEX_HOME || (0, import_node_path6.join)((0, import_node_os2.homedir)(), ".codex"), "config.toml");',
+        },
+        {
+          before: '  syncMcpServersFromEnabledTweaks();',
+          after: '  // Usage Sidebar: MCP sync disabled; preserve the shared user configuration.',
+        },
+      ],
     },
     {
       name: 'runtime-paths.js',
-      before: 'exports.CODEX_CONFIG_FILE = (0, node_path_1.join)((0, node_os_1.homedir)(), ".codex", "config.toml");',
-      after: 'exports.CODEX_CONFIG_FILE = (0, node_path_1.join)(process.env.CODEX_HOME || (0, node_path_1.join)((0, node_os_1.homedir)(), ".codex"), "config.toml");',
+      edits: [{
+        before: 'exports.CODEX_CONFIG_FILE = (0, node_path_1.join)((0, node_os_1.homedir)(), ".codex", "config.toml");',
+        after: 'exports.CODEX_CONFIG_FILE = (0, node_path_1.join)(process.env.CODEX_HOME || (0, node_path_1.join)((0, node_os_1.homedir)(), ".codex"), "config.toml");',
+      }],
     },
   ];
   const sha = value => crypto.createHash('sha256').update(value).digest('hex');
-  return variants.map(({ name, before, after }) => {
+  return variants.map(({ name, edits }) => {
     const file = plainPath(path.join(root, name));
     const original = fs.readFileSync(file, 'utf8');
     if (name === 'main.js' && !original.includes('var CODEX_PLUSPLUS_VERSION = "1.1.4";')) {
       throw new Error('Expected ChatGPT Layer 1.1.4 runtime.');
     }
-    const oldCount = original.split(before).length - 1;
-    const fixedCount = original.split(after).length - 1;
-    if (!((oldCount === 1 && fixedCount === 0) || (oldCount === 0 && fixedCount === 1))) {
-      throw new Error(`Unsupported or ambiguous Layer config path in ${name}; no files changed.`);
+    let updated = original;
+    for (const { before, after } of edits) {
+      const oldCount = updated.split(before).length - 1;
+      const fixedCount = updated.split(after).length - 1;
+      if (!((oldCount === 1 && fixedCount === 0) || (oldCount === 0 && fixedCount === 1))) {
+        throw new Error(`Unsupported or ambiguous Layer compatibility hook in ${name}; no files changed.`);
+      }
+      if (oldCount) updated = updated.replace(before, after);
     }
-    const updated = fixedCount ? original : original.replace(before, after);
     new vm.Script(updated, { filename: file });
     return { file, name, original, updated, changed: original !== updated, beforeSha256: sha(original), afterSha256: sha(updated) };
   });
@@ -62,7 +75,7 @@ function main(args = process.argv.slice(2)) {
   }
   return {
     status: args[2] === '--check' ? 'validated' : 'prepared',
-    layerVersion: '1.1.4', correction: 'CODEX_HOME-aware config path',
+    layerVersion: '1.1.4', correction: 'CODEX_HOME-aware config path; MCP synchronization disabled',
     files: plan.map(({ name, changed, beforeSha256, afterSha256 }) => ({ name, changed, beforeSha256, afterSha256 })),
   };
 }

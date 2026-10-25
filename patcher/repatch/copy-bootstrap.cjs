@@ -3,6 +3,35 @@ const fs = require('node:fs');
 const path = require('node:path');
 const APP_ID = 'Local.CodexUsageSidebar';
 
+function updateInProgress(projectRoot, token, dependencies = {}) {
+  if (!projectRoot || !path.isAbsolute(projectRoot)) return false;
+  const read = dependencies.readFile || (file => fs.readFileSync(file, 'utf8'));
+  const isLocked = dependencies.isUpdateLocked || (file => {
+    let fd;
+    try { fd = fs.openSync(file, 'r+'); return false; }
+    catch (error) { return ['EBUSY', 'EACCES', 'EPERM'].includes(error.code); }
+    finally { if (fd !== undefined) fs.closeSync(fd); }
+  });
+  const base = path.join(projectRoot, '.local/copy');
+  let marker;
+  try {
+    const value = read(path.join(base, 'update-in-progress.json'));
+    if (value.length > 4096) throw new Error('Invalid update marker');
+    marker = JSON.parse(value);
+    if (marker.schemaVersion !== 1 || !/^[a-f0-9]{32}$/.test(marker.ownerToken)) throw new Error('Invalid update marker');
+  } catch (error) {
+    // A missing/unreadable marker must not bypass a currently owned update.
+    // A malformed leftover cannot block startup after its OS lock is released.
+    return isLocked(path.join(base, 'update.lock'));
+  }
+  const time = (dependencies.now || Date.now)();
+  const started = Date.parse(marker.startedAt), expires = Date.parse(marker.expiresAt);
+  if (!Number.isFinite(started) || !Number.isFinite(expires) || started > time + 60000
+      || expires <= time || expires - started > 26 * 60 * 60 * 1000) return false;
+  if (token === marker.ownerToken) return false;
+  return isLocked(path.join(base, 'update.lock'));
+}
+
 function initialize(archiveDir, dependencies = {}) {
   const proc = dependencies.process || process;
   const load = dependencies.require || require;
@@ -11,6 +40,18 @@ function initialize(archiveDir, dependencies = {}) {
   const config = JSON.parse(read(path.join(root, 'copy-startup.json')));
   if (config.schemaVersion !== 1 || config.appUserModelId !== APP_ID || !config.packageFullName) {
     throw new Error('Invalid managed copy startup settings');
+  }
+  const ownerToken = proc.env.SIDEBAR_USAGE_UPDATE_OWNER;
+  delete proc.env.SIDEBAR_USAGE_UPDATE_OWNER;
+  if (updateInProgress(config.projectRoot, ownerToken, dependencies)) {
+    const { app, dialog } = load('electron');
+    let korean = false;
+    try { korean = app.getLocale?.().startsWith('ko'); } catch { /* Locale may not be ready yet. */ }
+    dialog.showErrorBox(korean ? '업데이트 진행 중' : 'Update in progress', korean
+      ? '업데이트 도우미가 대기 중이거나 복사본을 갱신하고 있습니다. 도우미가 완료 후 앱을 실행합니다. 취소하려면 도우미 창을 닫은 뒤 다시 실행하세요.'
+      : 'The update helper is waiting or preparing the copy. It will open the app when finished. To cancel, close the helper window, then try again.');
+    app.exit(0);
+    return { blocked: true };
   }
   const layerRoot = path.join(root, 'layer-data');
   const pkg = load('./package.json');
@@ -47,4 +88,4 @@ function initialize(archiveDir, dependencies = {}) {
   }
   return { root, layerRoot, appUserModelId: APP_ID, packageFullName: config.packageFullName };
 }
-module.exports = { initialize, APP_ID };
+module.exports = { initialize, updateInProgress, APP_ID };

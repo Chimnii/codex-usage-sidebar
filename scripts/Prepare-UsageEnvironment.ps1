@@ -128,13 +128,20 @@ $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 if ($currentSid -cne $expectedSid) { throw 'Run this project as the Windows account recorded in .local/settings.json.' }
 $nodePath = Get-UsageFile (Get-UsageRequiredProperty $settings 'nodePath')
 $agyPath = $null
+$antigravityEnabled = $settings.PSObject.Properties['agyPath'] -and -not [string]::IsNullOrWhiteSpace([string]$settings.agyPath)
 if ($settings.PSObject.Properties['agyPath'] -and -not [string]::IsNullOrWhiteSpace([string]$settings.agyPath) -and [IO.File]::Exists($settings.agyPath)) { $agyPath = Get-UsageFile $settings.agyPath }
 $codexHome = Get-AppDirectory (Get-UsageRequiredProperty $settings 'codexHome')
 $userProfile = Get-AppDirectory (Get-UsageRequiredProperty $settings 'userProfile')
 $claudeCredentialsPath = Join-Path $userProfile '.claude/.credentials.json'
 if ($settings.PSObject.Properties['claudeCredentialsPath'] -and -not [string]::IsNullOrWhiteSpace([string]$settings.claudeCredentialsPath)) { $claudeCredentialsPath = [string]$settings.claudeCredentialsPath }
 $claudeCredentialsPath = Assert-AppPlainPath $claudeCredentialsPath -AllowMissing
-if ($settings.PSObject.Properties['claudeEnabled'] -and -not $settings.claudeEnabled) { $claudeCredentialsPath = $null }
+$claudeEnabled = -not $settings.PSObject.Properties['claudeEnabled'] -or [bool]$settings.claudeEnabled
+if (-not $claudeEnabled) { $claudeCredentialsPath = $null }
+$usage = [pscustomobject]@{}
+if ($settings.PSObject.Properties['usage'] -and $null -ne $settings.usage) {
+    if ($settings.usage -isnot [pscustomobject] -and $settings.usage -isnot [System.Collections.IDictionary]) { throw 'The usage setting must be a JSON object.' }
+    $usage = $settings.usage
+}
 $localAppData = Get-AppDirectory (Get-UsageRequiredProperty $settings 'localAppData')
 $appData = Get-AppDirectory (Get-UsageRequiredProperty $settings 'appData')
 $originalCliPath = Get-UsageFile (Join-Path $AppDir 'resources\codex.exe')
@@ -205,6 +212,8 @@ $collector = [ordered]@{
     originalCliPath = $originalCliPath; cliSha256 = $originalCliIdentity.sha256
     userProfile = $userProfile; localAppData = $localAppData; appData = $appData
     claudeCredentialsPath = $claudeCredentialsPath
+    providerEnabled = [ordered]@{ antigravity = [bool]$antigravityEnabled; claude = [bool]$claudeEnabled }
+    usage = $usage
     workDir = $collectorWorkDir; cachePath = $cachePath; timeoutMs = 20000; intervalMs = 60000
 }
 $layerConfig = [ordered]@{

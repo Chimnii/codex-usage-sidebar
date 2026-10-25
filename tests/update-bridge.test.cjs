@@ -14,7 +14,7 @@ function setup(overrides = {}) {
   const controller = createUpdateController({ projectRoot: 'D:\\project spaces 한글', dataDir: 'D:\\cache',
     runningPackage: status().installedPackage }, {
     now: () => NOW, readFile: () => { throw Error('missing'); }, writeFile: (file, data) => writes.push(JSON.parse(data)),
-    setTimeout: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer; }, clearTimeout: t => { if(t) t.cancelled=true; },
+    setTimeout: (fn, delay) => { const timer = { fn: () => { timer.cancelled = true; return fn(); }, delay }; timers.push(timer); return timer; }, clearTimeout: t => { if(t) t.cancelled=true; },
     query: async () => status(), spawn: (exe, args, options) => { launches.push({exe,args,options}); setImmediate(() => child.emit('spawn')); return child; }, ...overrides
   });
   return { controller, timers, launches, writes, child };
@@ -56,8 +56,8 @@ test('concurrent checks coalesce and stop discards late result',async()=>{
   const pending=x.controller.check();const joined=x.controller.check();assert.equal(joined,pending);await Promise.resolve();assert.equal(calls,1);x.controller.stop();
   finish(status(true));await pending;assert.equal(x.writes.length,0);assert.equal(x.controller.getState().status,'unknown');
 });
-test('recent cache defers polling and sanitization rejects false/malformed availability',()=>{
-  const x=setup({readFile:()=>JSON.stringify(status(true))});assert.equal(x.timers[0].delay,INTERVAL);
+test('recent cache still checks local installation promptly and rejects false/malformed availability',()=>{
+  const x=setup({readFile:()=>JSON.stringify(status(true))});assert.equal(x.timers[0].delay,10000);
   assert.equal(x.controller.getState().status,'available');x.controller.stop();
   for(const bad of [{...status(),status:'available'}, {...status(),storeUpdateAvailable:'false'}, {...status(),installedPackage:'other'}]) {
     assert.throws(()=>sanitizeStatus(bad));
@@ -74,10 +74,52 @@ test('failed manual request returns failure even when retained state says curren
   for(const available of [false,true]) {
     const x=setup({readFile:()=>JSON.stringify(status(available)),query:async()=>{throw Error('private raw error');}});
     const result=await x.controller.check(); assert.equal(result.ok,false);assert.equal(result.reason,'check-failed');
-    assert.equal(result.state.status,available?'available':'current');assert.equal(result.state.stale,true);
+    assert.equal(result.state.status,available?'available':'error');assert.equal(result.state.stale,true);
     assert.equal(result.state.checking,false);assert.equal(x.writes.length,0);
     assert.equal(x.timers.filter(t=>!t.cancelled).length,1);assert.equal(x.timers.at(-1).delay,RETRY);x.controller.stop();
   }
+});
+
+function localStatus(copyUpdateRequired = false) {
+  return { ...status(), status: copyUpdateRequired ? 'available' : 'unknown', copyUpdateRequired,
+    storeStatus: 'unchecked', storeCheckedAt: null, storeError: null };
+}
+test('startup local check detects newer original without renewing cached Store timestamp', async () => {
+  const cached = { ...status(), checkedAt: new Date(NOW - 3600000).toISOString() };
+  const calls = [];
+  const x = setup({ readFile: () => JSON.stringify(cached), query: async localOnly => { calls.push(localOnly); return localStatus(true); } });
+  await x.timers[0].fn();
+  assert.deepEqual(calls, [true]); assert.equal(x.controller.getState().copyUpdateRequired, true);
+  assert.equal(x.controller.getState().storeCheckedAt, cached.checkedAt);
+  assert.equal(x.timers.at(-1).delay, INTERVAL - 3600000);
+  assert.equal(x.timers.filter(t => !t.cancelled).length, 1); x.controller.stop();
+});
+test('first local check and a changed original schedule a real Store query without a six-hour delay', async () => {
+  for (const cache of [null, status()]) {
+    const calls = [];
+    const local = { ...localStatus(true), installedPackage: 'OpenAI.Codex_26.1021.1.0_x64__2p2nqsd0c76g0', installedVersion: '26.1021.1.0' };
+    const x = setup({ readFile: () => { if (!cache) throw Error('no cache'); return JSON.stringify(cache); },
+      query: async localOnly => { calls.push(localOnly); return localOnly ? local : { ...status(), ...local, storeStatus: 'current', storeCheckedAt: new Date(NOW).toISOString() }; } });
+    await x.timers[0].fn(); assert.equal(x.timers.at(-1).delay, 0); await x.timers.at(-1).fn();
+    assert.deepEqual(calls, [true, false]); assert.equal(x.timers.at(-1).delay, INTERVAL); x.controller.stop();
+  }
+});
+test('Store offline still exposes actionable local refresh, while no local change never claims current', async () => {
+  for (const old of [true, false]) {
+    const x = setup({ query: async () => ({ ...localStatus(old), status: old ? 'available' : 'error',
+      storeStatus: 'error', storeCheckedAt: new Date(NOW).toISOString(), storeError: 'query-failed' }) });
+    const result = await x.controller.check(); assert.equal(result.ok, old); assert.equal(result.state.stale, true);
+    assert.equal(result.state.storeStatus, 'error'); assert.equal(result.state.status, old ? 'available' : 'error');
+    assert.equal(x.timers.at(-1).delay, RETRY); x.controller.stop();
+  }
+});
+test('manual check during local startup obtains one subsequent Store result and one timer', async () => {
+  let finish; const calls = [];
+  const x = setup({ query: localOnly => { calls.push(localOnly); return localOnly ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(status()); } });
+  const local = x.timers[0].fn(); await Promise.resolve();
+  const a = x.controller.check(), b = x.controller.check(); finish(localStatus());
+  await local; assert.equal((await a).state.status, 'current'); await b;
+  assert.deepEqual(calls, [true, false]); assert.equal(x.timers.filter(t => !t.cancelled).length, 1); x.controller.stop();
 });
 test('background and manual callers await the same fresh result',async()=>{
   let resolve;const x=setup({query:()=>new Promise(r=>resolve=r)});

@@ -43,6 +43,10 @@ function Get-UsageCopyRevision {
     foreach ($relative in @('scripts', 'patcher', 'tweak', 'collector', '.local/layer-runtime')) {
         $root = Join-Path $ProjectRoot $relative
         foreach ($entry in @(Get-UsageCopyTree $root | Sort-Object path)) {
+            # Documentation, tests and release packaging do not change the copy.
+            # Runtime assets remain included, including Layer's loader source.
+            if ($entry.path -match '(?i)(^|/)(tests?|docs)(/|$)|\.md$|\.(test|spec)\.[^/]+$|(^|/)(README|CHANGELOG|CONTRIBUTING|LICENSE|NOTICE)(\.[^/]+)?$' -or
+                ($relative -eq 'scripts' -and $entry.path -in @('test.cjs','Test-Windows.ps1','package-release.cjs','Doctor.ps1'))) { continue }
             $hash = (Get-AppIdentity (Join-Path $root $entry.path)).sha256
             $lines.Add($relative + '/' + $entry.path + ':' + $hash)
         }
@@ -51,6 +55,11 @@ function Get-UsageCopyRevision {
     $claudeCredentialsPath = if ($Settings.PSObject.Properties['claudeCredentialsPath']) { [string]$Settings.claudeCredentialsPath } else { Join-Path $Settings.userProfile '.claude/.credentials.json' }
     $lines.Add('claudeCredentialsPath:' + $claudeCredentialsPath)
     $lines.Add('claudeEnabled:' + $(if ($Settings.PSObject.Properties['claudeEnabled']) { [string]$Settings.claudeEnabled } else { 'True' }))
+    if ($Settings.PSObject.Properties['usage']) { $lines.Add('usage:' + ($Settings.usage | ConvertTo-Json -Depth 16 -Compress)) }
+    foreach ($relative in @('package.json','assets/loader.cjs','packages/loader/loader.cjs','packages/installer/assets/loader.cjs')) {
+        $file = Join-Path (Join-Path $ProjectRoot '.local/layer-source') $relative
+        if ([IO.File]::Exists($file)) { $lines.Add('layer-source/' + $relative + ':' + (Get-AppIdentity $file).sha256) }
+    }
     $sha = [Security.Cryptography.SHA256]::Create()
     try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n")))).Replace('-', '') }
     finally { $sha.Dispose() }
@@ -83,7 +92,7 @@ function Copy-UsageAppTree {
 }
 
 function Read-UsageCopyCurrent {
-    param([string]$ProjectRoot, [ValidateSet('current','previous')][string]$Name = 'current')
+    param([string]$ProjectRoot, [ValidateSet('current','previous')][string]$Name = 'current', [switch]$AllowMissingSlot)
     $base = Join-Path $ProjectRoot '.local/copy'
     $pointer = Join-Path $base ($Name + '.json')
     if (-not [IO.File]::Exists($pointer)) { return $null }
@@ -98,7 +107,8 @@ function Read-UsageCopyCurrent {
     $expectedApp = Join-Path $value.buildDir 'app'
     if ((Get-AppFullPath $value.appDir) -ine (Get-AppFullPath $expectedApp)) { throw 'Copy app path does not match its build.' }
     if ((Get-AppFullPath $value.layerRoot) -ine (Get-AppFullPath (Join-Path $value.buildDir 'layer-data'))) { throw 'Copy runtime path does not match its build.' }
-    [void](Get-AppDirectory $value.appDir)
+    if ($AllowMissingSlot) { [void](Assert-AppPlainPath $value.appDir -AllowMissing) }
+    else { [void](Get-AppDirectory $value.appDir) }
     return $value
 }
 
@@ -119,7 +129,7 @@ function Remove-UsageCopyDirectory {
     $base = Get-AppFullPath (Join-Path $ProjectRoot '.local/copy')
     $full = Assert-AppPlainPath $Path -AllowMissing
     $parent = Split-Path $full -Parent
-    if (($full -in @((Join-Path $base 'staging'),(Join-Path $base 'retired'))) -or $parent -ieq (Join-Path $base 'builds')) {
+    if (($full -in @((Join-Path $base 'staging'),(Join-Path $base 'retired'),(Join-Path $base 'damaged'))) -or $parent -ieq (Join-Path $base 'builds')) {
         if (-not (Test-Path -LiteralPath $full)) { return }
         # Validate all descendants and the resolved boundary before recursive deletion.
         $null = @(Get-UsageCopyTree $full)
@@ -164,6 +174,10 @@ function Complete-UsageCopyActivation {
     $journalPath = Join-Path $base 'activation.json'
     if (-not [IO.File]::Exists($journalPath)) { return }
     $journal = Read-AppJson $journalPath
+    if ($journal.PSObject.Properties['operation'] -and $journal.operation -ceq 'repair') {
+        Complete-UsageCopyRepair $ProjectRoot $journal
+        return
+    }
     $active = Join-Path $base 'active'; $previous = Join-Path $base 'previous'; $retired = Join-Path $base 'retired'
     # Never recover by renaming a directory that may host a running process.
     Assert-UsageCopySlotStopped $active
@@ -204,6 +218,76 @@ function Complete-UsageCopyActivation {
     Remove-Item -LiteralPath $journalPath
 }
 
+function Complete-UsageCopyRepair {
+    param([string]$ProjectRoot, $Journal)
+    $base = Get-AppFullPath (Join-Path $ProjectRoot '.local/copy')
+    $active = Assert-AppPlainPath (Join-Path $base 'active') -AllowMissing
+    $stage = Assert-AppPlainPath (Join-Path $base 'staging') -AllowMissing
+    $damaged = Assert-AppPlainPath (Join-Path $base 'damaged') -AllowMissing
+    if ($Journal.next.schemaVersion -ne 2 -or $Journal.next.kind -cne 'usage-shared-profile-copy' -or
+        $Journal.next.buildDir -ine $stage -or $Journal.next.appDir -ine (Join-Path $stage 'app') -or
+        $Journal.next.layerRoot -ine (Join-Path $stage 'layer-data')) { throw 'Invalid repair staging metadata.' }
+    $restored = Convert-UsageCopyLocation $Journal.next $active
+    $previous = Read-UsageCopyCurrent $ProjectRoot previous
+    if (-not $previous -or $previous.schemaVersion -ne 2 -or $previous.generation -cne $Journal.previousGeneration) { throw 'Repair backup metadata changed.' }
+    Assert-UsageCopyPair $previous
+    foreach ($slot in @($active,$stage,$damaged,$previous.buildDir)) { Assert-UsageCopySlotStopped $slot }
+    $installed = $null
+    try { $installed = Read-AppJson (Join-Path $active 'copy.json') } catch { }
+    if (-not $installed -or (Get-UsageCopyProperty $installed 'generation') -cne $Journal.next.generation) {
+        Assert-UsageCopyPair $Journal.next
+        if ([IO.Directory]::Exists($active)) {
+            if (Test-Path -LiteralPath $damaged) { throw 'Repair quarantine already exists; refusing to overwrite it.' }
+            $null = @(Get-UsageCopyTree $active)
+            Move-Item -LiteralPath $active -Destination $damaged
+        }
+        Move-Item -LiteralPath $stage -Destination $active
+    }
+    Assert-UsageCopyPair $restored
+    Write-AppJson (Join-Path $active 'copy.json') $restored
+    Write-AppJson (Join-Path $base 'current.json') $restored
+    Write-AppJson (Join-Path $base 'restore-hold.json') ([pscustomobject]@{ generation=$restored.generation })
+    Remove-Item -LiteralPath (Join-Path $base 'activation.json')
+}
+
+function Repair-UsageCopyFromPrevious {
+    param([string]$ProjectRoot, $Copy, $Previous)
+    $base = Get-AppFullPath (Join-Path $ProjectRoot '.local/copy')
+    $stage = Join-Path $base 'staging'
+    if ($Copy.buildDir -ine $stage -or $Previous.buildDir -ine (Join-Path $base 'previous')) { throw 'Repair requires owned staging and previous slots.' }
+    Assert-UsageCopyPair $Copy
+    Assert-UsageCopyPair $Previous
+    Assert-UsageCopySlotStopped (Join-Path $base 'active')
+    # Keep one damaged slot for inspection. It never replaces the valid backup.
+    Remove-UsageCopyDirectory $ProjectRoot (Join-Path $base 'damaged')
+    $Copy.generation = 'repair-' + [guid]::NewGuid().ToString('N')
+    Write-AppJson (Join-Path $stage 'copy.json') $Copy
+    $journal = [pscustomobject]@{ operation='repair'; next=$Copy; previousGeneration=$Previous.generation }
+    Write-AppJson (Join-Path $base 'activation.json') $journal
+    Complete-UsageCopyRepair $ProjectRoot $journal
+    return Read-UsageCopyCurrent $ProjectRoot
+}
+
+function Remove-UsageCopyOldLaunchReports {
+    param([string]$ProjectRoot, [ValidateRange(1,1000)][int]$Keep = 20)
+    $base = Assert-AppPlainPath (Join-Path $ProjectRoot '.local/copy') -AllowMissing
+    $launches = Assert-AppPlainPath (Join-Path $base 'launches') -AllowMissing
+    if (-not [IO.Directory]::Exists($launches)) { return }
+    $protected = $null
+    try {
+        $last = Read-AppJson (Join-Path $base 'last-launch.json')
+        $candidate = Get-AppFullPath $last.launchPath
+        if ((Split-Path $candidate -Parent) -ieq $launches) { $protected = $candidate }
+    } catch { }
+    $reports = @(Get-ChildItem -LiteralPath $launches -File | Where-Object { $_.Name -match '^\d{8}T\d{9}Z-[a-f0-9]{8}\.json$' } | Sort-Object LastWriteTimeUtc -Descending)
+    foreach ($report in @($reports | Select-Object -Skip $Keep)) {
+        if ($report.FullName -ieq $protected -or $report.LastWriteTimeUtc -gt [DateTime]::UtcNow.AddMinutes(-10)) { continue }
+        $path = Assert-AppPlainPath $report.FullName
+        if ((Split-Path $path -Parent) -ine $launches) { throw 'Unexpected launch report location.' }
+        Remove-Item -LiteralPath $path -Force
+    }
+}
+
 function Publish-UsageCopy {
     param([string]$ProjectRoot, $Copy, $Old)
     $base = Join-Path $ProjectRoot '.local/copy'
@@ -240,6 +324,58 @@ function Get-UsageCopyBlockers {
     # renderers/browser processes may not concurrently own this Chromium profile.
     return @(Get-CimInstance Win32_Process -Filter "Name = 'ChatGPT.exe'" -ErrorAction Stop |
         Select-Object ProcessId, ExecutablePath)
+}
+
+function Get-UsageCopyProperty {
+    param($Value, [string]$Name, $Default = $null)
+    if ($null -ne $Value -and $null -ne $Value.PSObject.Properties[$Name]) { return $Value.$Name }
+    return $Default
+}
+
+function Get-UsageCopyReadiness {
+    param($Launch, $Status, [object[]]$WebProfiles, $CollectorConfig)
+    $ui = Get-UsageCopyProperty $Status 'ui'
+    $runtime = Get-UsageCopyProperty $Status 'runtime'
+    $visiblePanels = Get-UsageCopyProperty $ui 'visiblePanels' 0
+    $hiddenBySettings = (Get-UsageCopyProperty $ui 'hiddenBySettings' $false) -eq $true -and
+        (Get-UsageCopyProperty $ui 'mountedPanels' 0) -gt 0 -and $visiblePanels -eq 0
+    $uiOk = (Get-UsageCopyProperty $ui 'detectorVersion' 0) -eq 2 -and
+        (($visiblePanels -gt 0 -and (Get-UsageCopyProperty $ui 'withinSidebar' $false) -eq $true) -or $hiddenBySettings) -and
+        (Get-UsageCopyProperty $ui 'snagDetected' $true) -eq $false
+    $updated = Get-UsageCopyProperty $Status 'updatedAt'
+    $refreshed = $false
+    try { $refreshed = $updated -and ([DateTime]$updated).ToUniversalTime() -gt ([DateTime]$Launch.startedAt).ToUniversalTime() } catch { }
+    $providers = @(foreach ($id in @('codex','antigravity','claude')) {
+        $provider = @(Get-UsageCopyProperty $Status 'providers' @() | Where-Object id -CEQ $id | Select-Object -First 1)
+        $enabled = switch ($id) {
+            'antigravity' { -not [string]::IsNullOrWhiteSpace([string](Get-UsageCopyProperty $CollectorConfig 'agyPath')) }
+            'claude' { -not [string]::IsNullOrWhiteSpace([string](Get-UsageCopyProperty $CollectorConfig 'claudeCredentialsPath')) }
+            default { $true }
+        }
+        $enabledHints = Get-UsageCopyProperty $CollectorConfig 'providerEnabled'
+        if ($enabledHints -and $enabledHints.PSObject.Properties[$id] -and $enabledHints.$id -is [bool]) { $enabled = $enabledHints.$id }
+        $state = if ($provider.Count) { Get-UsageCopyProperty $provider[0] 'status' 'unknown' } else { 'unknown' }
+        if ($state -notin @('ok','stale','unavailable','disconnected')) { $state = 'unknown' }
+        [pscustomobject]@{ id=$id; enabled=[bool]$enabled; status=$(if ($enabled) { $state } else { 'disabled' }) }
+    })
+    return [pscustomobject]@{
+        checks = [pscustomobject]@{
+            originalRuntimeProfile = @($Launch.profiles.electronUserData,$Launch.profiles.webProfile) -icontains (Get-UsageCopyProperty $runtime 'userData')
+            originalWebProfile = @($WebProfiles) -icontains $Launch.profiles.webProfile
+            originalCodexHome = (Get-UsageCopyProperty $runtime 'codexHome') -ieq $Launch.profiles.codexHome
+            selectedCopy = (Get-UsageCopyProperty $runtime 'executable') -ieq (Join-Path $Launch.appDir 'ChatGPT.exe')
+            sidebarPanel = [bool]$uiOk
+            # Provider authentication/availability is reported separately. A
+            # failed provider must not turn a working app into a failed launch.
+            collectorRefresh = (Get-UsageCopyProperty $Status 'cycles' 0) -ge 1 -and
+                (Get-UsageCopyProperty $Status 'active' $true) -eq $false -and [bool]$refreshed
+        }
+        providerHealth = $providers
+        refreshObservation = [pscustomobject]@{
+            cycles = Get-UsageCopyProperty $Status 'cycles' 0
+            intervalMs = Get-UsageCopyProperty $Status 'intervalMs'
+        }
+    }
 }
 
 function Assert-UsageCopyStopped {

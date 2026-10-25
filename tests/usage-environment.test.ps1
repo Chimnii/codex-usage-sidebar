@@ -72,6 +72,7 @@ Run-Case 'production collector paths bind selected app and account while preserv
     Assert-True ((Get-TreeFingerprint $f.runtimeSource) -eq $beforeRuntime) 'Preparation mutated source runtime.'
     $patched = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $result.runtimeRoot 'main.js') -Raw
     Assert-True ($patched.Contains('process.env.CODEX_HOME')) 'Runtime config path was not made CODEX_HOME aware.'
+    Assert-True ($patched.Contains('MCP sync disabled') -and -not $patched.Contains('  syncMcpServersFromEnabledTweaks();')) 'Unused Layer MCP synchronization must not touch the shared profile.'
     $layerConfig = Get-Content -LiteralPath (Join-Path $result.layerRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert-True (-not $layerConfig.codexPlusPlus.autoUpdate -and $layerConfig.tweaks.'local.sidebar-usage-demo'.enabled) 'Owned Layer runtime settings incorrect.'
     return $result
@@ -85,6 +86,21 @@ Run-Case 'second preparation preserves existing cache and user config byte for b
     $null = Invoke-Prepare $f
     Assert-True ((Get-FileHash -LiteralPath $result.cachePath -Algorithm SHA256).Hash -eq $cacheHash) 'Existing cache overwritten.'
     Assert-True ((Get-TreeFingerprint $f.settings.userProfile) -eq $profileBefore) 'User settings overwritten.'
+}
+Run-Case 'usage preferences and explicit provider enablement reach the collector without changing profiles' {
+    $f = New-Fixture 'usage-preferences'
+    $settings = Get-Content -LiteralPath $f.settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $settings.agyPath = Join-Path $f.root 'missing-configured-agy.exe'
+    $settings | Add-Member -NotePropertyName claudeEnabled -NotePropertyValue $false
+    $settings | Add-Member -NotePropertyName usage -NotePropertyValue ([pscustomobject]@{language='en';hiddenProviders=@('antigravity');providers=[pscustomobject]@{codex=[pscustomobject]@{intervalSeconds=120}}})
+    Save-Json $f.settingsPath $settings
+    $before = Get-TreeFingerprint $f.settings.userProfile
+    $result = Invoke-Prepare $f
+    $config = Get-Content -LiteralPath $result.collectorConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True ($null -eq $config.agyPath -and $config.providerEnabled.antigravity) 'Missing configured executable must be distinguished from disabled provider.'
+    Assert-True (-not $config.providerEnabled.claude -and $null -eq $config.claudeCredentialsPath) 'Explicitly disabled Claude must stay disabled.'
+    Assert-True ($config.usage.language -eq 'en' -and $config.usage.providers.codex.intervalSeconds -eq 120) 'Usage preferences lost during preparation.'
+    Assert-True ((Get-TreeFingerprint $f.settings.userProfile) -eq $before) 'Preferences preparation mutated shared profile.'
 }
 Run-Case 'updated selected app CLI replaces owned CLI copy without modifying the source' {
     $f = New-Fixture 'cli-update'

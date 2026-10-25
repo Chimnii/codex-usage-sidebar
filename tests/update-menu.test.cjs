@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { createUpdateMenu, MENU_ID, CHECKING_LABEL } = require('../tweak/update-menu.cjs');
 const { createUpdateController } = require('../tweak/update-bridge.cjs');
 
-function fixture(check = async () => ({ ok: true, state: { status: 'current' } })) {
+function fixture(check = async () => ({ ok: true, state: { status: 'current' } }), language = 'ko') {
   const dialogs = [], nativeCalls = [], unrelated = [];
   const log = { info: () => {} }, builtin = { checkForUpdates: () => { nativeCalls.push('native'); } };
   function original() { log.info('Check for updates requested via menu.'); return builtin.checkForUpdates(); }
@@ -14,7 +14,7 @@ function fixture(check = async () => ({ ok: true, state: { status: 'current' } }
   const Menu = { current: null, buildFromTemplate: build,
     getApplicationMenu() { return this.current; }, setApplicationMenu(menu) { this.current = menu; } };
   const savedBuild = Menu.buildFromTemplate, savedSet = Menu.setApplicationMenu;
-  const bridge = createUpdateMenu({ Menu, dialog: { showMessageBox: async (...args) => { dialogs.push(args.at(-1)); } }, updater: { check }, log });
+  const bridge = createUpdateMenu({ Menu, dialog: { showMessageBox: async (...args) => { dialogs.push(args.at(-1)); } }, updater: { check }, log, language });
   function install(label='업데이트 확인…') {
     const template = [{ id:'help', role:'help', label:'도움말', submenu:[
       {label:'Documentation',click:()=>unrelated.push('docs')},{label,click:original}
@@ -28,6 +28,19 @@ test('native Help action is replaced before menu construction; labels and unrela
   const x=fixture(),m=x.install();assert.equal(m.item.id,MENU_ID);assert.equal(m.template[0].submenu[1].id,undefined);
   await m.item.click();assert.equal(x.dialogs[0].message,'최신 버전입니다.');assert.equal(x.nativeCalls.length,0);
   m.other.click();assert.deepEqual(x.unrelated,['docs']);assert.equal(m.item.label,'업데이트 확인…');assert.equal(m.item.enabled,true);x.bridge.stop();
+});
+
+test('menu diagnostics distinguish pending, unsupported and successfully wired menus', () => {
+  const x = fixture(); assert.equal(x.bridge.getHealth().status, 'pending');
+  x.Menu.setApplicationMenu(x.Menu.buildFromTemplate([{ label: 'Help', submenu: [{ label: 'Changed upstream action', click() {} }] }]));
+  assert.deepEqual(x.bridge.getHealth(), { status: 'unsupported', patchedCount: 0 });
+  x.install(); assert.deepEqual(x.bridge.getHealth(), { status: 'ok', patchedCount: 1 }); x.bridge.stop();
+});
+test('offline local refresh is explained in English without claiming a successful Store check', async () => {
+  const x = fixture(async () => ({ ok: true, state: { status: 'available', copyUpdateRequired: true, storeUpdateAvailable: false, storeStatus: 'error' } }), 'en');
+  await x.install('Check for updates').item.click();
+  assert.equal(x.dialogs[0].message, 'The original app has been updated.');
+  assert.match(x.dialogs[0].detail, /Store check failed/); x.bridge.stop();
 });
 test('language changes and menu rebuilds keep one connected entry without duplicate handling',async()=>{
   const x=fixture();for(const label of ['Check for Updates…','업데이트 확인…','アップデートを確認…']) {

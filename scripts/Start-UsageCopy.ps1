@@ -19,6 +19,13 @@ if ($CheckOnly) {
 $lock = [IO.File]::Open((Join-Path $base 'start.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 try {
     Assert-UsageCopyStopped
+    if ([IO.File]::Exists((Join-Path $base 'activation.json'))) {
+        # Recover before reading a pointer whose active directory may be in
+        # transit. Keep the same start -> prepare lock order as preparation.
+        $recoveryLock = [IO.File]::Open((Join-Path $base 'prepare.lock'),'OpenOrCreate','ReadWrite','None')
+        try { Complete-UsageCopyActivation $configuration.root }
+        finally { $recoveryLock.Dispose() }
+    }
     $holdPath = Join-Path $base 'restore-hold.json'
     $selected = Read-UsageCopyCurrent $configuration.root
     $held = $false

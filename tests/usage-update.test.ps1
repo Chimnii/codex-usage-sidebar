@@ -66,7 +66,34 @@ Case 'background status detects original auto-update even when Store has no pend
     $status=Get-UsageStoreStatus $target 'OpenAI.Codex_26.1015.1.0_x64__2p2nqsd0c76g0'
     Assert-True ($status.status -eq 'available' -and $status.copyUpdateRequired -and -not $status.storeUpdateAvailable) 'Missing copy refresh notification.'
     $target.packageFullName='OpenAI.Codex_26.1017.1.0_x64__2p2nqsd0c76g0'
-    $null=Expect-Failure { Get-UsageStoreStatus $target }
+    $pending=Get-UsageStoreStatus $target 'OpenAI.Codex_26.1016.8120.0_x64__2p2nqsd0c76g0'
+    Assert-True ($pending.status -eq 'available' -and $pending.copyUpdateRequired -and $pending.storeStatus -eq 'error' -and $pending.storeError -eq 'metadata-pending') 'Lagging metadata blocked the local update.'
+}
+Case 'Store offline retains local evidence without reporting current' {
+    $module=Get-Module UsageUpdate.Common
+    & $module { function script:Invoke-UsageStoreCommand { throw 'offline private diagnostic' } }
+    $target=[pscustomobject]@{packageFullName='OpenAI.Codex_26.1017.1.0_x64__2p2nqsd0c76g0'}
+    $status=Get-UsageStoreStatus $target 'OpenAI.Codex_26.1016.8120.0_x64__2p2nqsd0c76g0'
+    Assert-True ($status.status -eq 'available' -and $status.copyUpdateRequired -and $status.storeStatus -eq 'error') 'Lost local evidence.'
+    $same=Get-UsageStoreStatus $target $target.packageFullName
+    Assert-True ($same.status -eq 'error' -and -not $same.copyUpdateRequired) 'Offline became current.'
+    Assert-True (($status|ConvertTo-Json) -notmatch 'private diagnostic') 'Raw diagnostics leaked.'
+    $local=Get-UsageStoreStatus $target $target.packageFullName -LocalOnly
+    Assert-True ($local.status -eq 'unknown' -and $local.storeStatus -eq 'unchecked' -and $null -eq $local.storeCheckedAt) 'Local check queried Store or claimed current.'
+}
+Case 'offline but already updated original repatches without applying another Store update' {
+    $bag=@{launched=$false;applied=$false}
+    Invoke-UsageUpdateFlow -GetTarget { [pscustomobject]@{packageFullName='OpenAI.Codex_26.1017.1.0_x64__2p2nqsd0c76g0'} } `
+      -Check { param($target); Get-UsageStoreStatus $target 'OpenAI.Codex_26.1016.8120.0_x64__2p2nqsd0c76g0' } `
+      -Apply {$bag.applied=$true} -Guard {} -Launch {$bag.launched=$true} -Log {}
+    Assert-True ($bag.launched -and -not $bag.applied) 'Offline local repatch was blocked or attempted a Store update.'
+}
+Case 'registered newer package completes update despite lagging Store metadata' {
+    $bag=@{version='26.1016.8120.0';launched=$false;checks=0}
+    Invoke-UsageUpdateFlow -GetTarget { [pscustomobject]@{packageFullName=('OpenAI.Codex_'+$bag.version+'_x64__2p2nqsd0c76g0')} } `
+      -Check { param($target);$bag.checks++;if($bag.checks -eq 1){return [pscustomobject]@{status='available';storeUpdateAvailable=$true}};return [pscustomobject]@{status='error';storeStatus='error';storeUpdateAvailable=$false} } `
+      -Apply {$bag.version='26.1017.1.0'} -Guard {} -Launch {$bag.launched=$true} -Log {} -Delay {} -CompletionAttempts 2
+    Assert-True ($bag.launched -and $bag.checks -eq 2) 'Registered completion was blocked by catalog metadata.'
 }
 Import-Module (Join-Path $root 'scripts/UsageUpdate.Common.psm1') -Force -DisableNameChecking
 $report = @{checkedAt=[DateTime]::UtcNow.ToString('o');results=@($results.ToArray())}

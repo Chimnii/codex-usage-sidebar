@@ -5,6 +5,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { requestClaudeUsage } = require('./claude-usage.cjs');
+const { normalizeUsageSettings } = require('./settings.cjs');
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_CACHE_BYTES = 256 * 1024;
@@ -39,9 +40,9 @@ function record(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function text(value, fallback = '') {
+function text(value, fallback = '', limit = 120) {
   return typeof value === 'string'
-    ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || fallback
+    ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, limit) || fallback
     : fallback;
 }
 
@@ -113,7 +114,7 @@ function parseAntigravity(report) {
       const period = bucket.window === 'weekly' ? '7일' : bucket.window === 'daily' ? '1일' : '';
       const rowLabel = [text(group.name), label, period && !label.includes(period) ? period : ''].filter(Boolean).join(' · ');
       rows.push({
-        id: `gemini:${text(group.id, String(groupIndex))}:${text(bucket.id, text(bucket.window, String(bucketIndex)))}:${bucketIndex}`,
+        id: `gemini:${text(group.id, String(groupIndex))}:${text(bucket.id, text(bucket.window, String(bucketIndex)))}:${bucketIndex}`.slice(0, 160),
         label: rowLabel,
         usedPercent: percent((1 - bucket.remaining_fraction) * 100),
         resetsAt: timestamp(bucket.reset_time),
@@ -130,20 +131,22 @@ function cachedProvider(value, id) {
   try {
     const windows = value.windows.map((row) => {
       if (!record(row) || !text(row.id) || !text(row.label)) throw failure('BAD_RESPONSE');
-      return { id: text(row.id), label: text(row.label), usedPercent: percent(row.usedPercent), resetsAt: timestamp(row.resetsAt) };
+      return { id: text(row.id, '', 160), label: text(row.label, '', 160), usedPercent: percent(row.usedPercent), resetsAt: timestamp(row.resetsAt) };
     });
     return { id, checkedAt, windows };
   } catch { return null; }
 }
 
 function mergeProvider(id, previous, outcome, attemptedAt, checkedAt) {
-  if (outcome.status === 'disconnected') return { id, label: PROVIDERS[id], status: 'disconnected', checkedAt: null, attemptedAt: null, windows: [], error: null };
-  const base = { id, label: PROVIDERS[id], attemptedAt };
+  if (outcome.status === 'disconnected') return { id, label: PROVIDERS[id], status: 'disconnected', checkedAt: null, attemptedAt: null, windows: [], error: null, errorCode: null, durationMs: null, consecutiveFailures: 0 };
+  const base = { id, label: PROVIDERS[id], attemptedAt, durationMs: null };
   if (outcome.status === 'fulfilled') {
-    return { ...base, status: 'ok', checkedAt, windows: outcome.value, error: null };
+    return { ...base, status: 'ok', checkedAt, windows: outcome.value, error: null, errorCode: null, consecutiveFailures: 0 };
   }
   const good = cachedProvider(previous, id);
-  return { ...base, status: good ? 'stale' : outcome.reason?.code === 'CLAUDE_NOT_CONNECTED' ? 'disconnected' : 'unavailable', checkedAt: good?.checkedAt ?? null, windows: good?.windows ?? [], error: sanitizedError(outcome.reason) };
+  return { ...base, status: good ? 'stale' : outcome.reason?.code === 'CLAUDE_NOT_CONNECTED' ? 'disconnected' : 'unavailable', checkedAt: good?.checkedAt ?? null, windows: good?.windows ?? [], error: sanitizedError(outcome.reason),
+    errorCode: Object.hasOwn(ERRORS, outcome.reason?.code) ? outcome.reason.code : 'BAD_RESPONSE',
+    consecutiveFailures: Math.min(100000, (Number.isInteger(previous?.consecutiveFailures) ? previous.consecutiveFailures : 0) + 1) };
 }
 
 function buildEnvironment(config, provider, source = process.env) {
@@ -203,8 +206,10 @@ function runProcess(file, args, options = {}) {
       finished = true;
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', abort);
-      if (child?.stdin && !child.stdin.destroyed) { try { child.stdin.end(); } catch {} }
-      Promise.resolve(killChild(child)).catch(() => {}).then(() => error ? reject(error) : resolve(value));
+      // Successful app-server replies can exit cleanly on EOF. Failed/hung
+      // requests still stop immediately; only the owned child is ever killed.
+      Promise.resolve(closeOwnedChild(child, killChild, error ? 0 : options.exitGraceMs ?? 250))
+        .catch(() => {}).then(() => error ? reject(error) : resolve(value));
     };
     const write = (packet) => {
       if (!finished) { try { child.stdin.write(JSON.stringify(packet) + '\n'); } catch { finish(failure('START_FAILED')); } }
@@ -262,9 +267,26 @@ function runProcess(file, args, options = {}) {
       options.signal?.addEventListener('abort', abort, { once: true });
       if (options.signal?.aborted) { abort(); return; }
       if (options.protocol === 'codex') {
-        write({ id: 1, method: 'initialize', params: { clientInfo: { name: 'sidebar-usage-collector', version: '1.0.0' } } });
+        write({ id: 1, method: 'initialize', params: { clientInfo: { name: 'sidebar-usage-collector', version: '1.1.0' } } });
       } else child.stdin.end();
     } catch { finish(failure('START_FAILED')); }
+  });
+}
+
+function closeOwnedChild(child, killChild = killOwnedChild, graceMs = 250) {
+  if (!child) return Promise.resolve();
+  return new Promise(resolve => {
+    let settled = false, timer;
+    const done = () => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); child.removeListener('close', done); resolve();
+    };
+    child.once('close', done);
+    try { if (child.stdin && !child.stdin.destroyed) child.stdin.end(); } catch {}
+    if (settled) return;
+    if (child.exitCode !== null || child.signalCode !== null) { done(); return; }
+    const force = () => { if (!settled) Promise.resolve(killChild(child)).catch(() => {}).then(done); };
+    if (graceMs > 0) timer = setTimeout(force, graceMs); else force();
   });
 }
 
@@ -278,7 +300,12 @@ function validateConfig(config) {
   }
   const timeoutMs = config.timeoutMs ?? 20000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000) throw failure('CONFIG_ERROR');
-  return { ...config, timeoutMs };
+  const usage = normalizeUsageSettings(config.usage);
+  // Preserve the legacy top-level timeout for callers without per-provider settings.
+  for (const id of Object.keys(PROVIDERS)) {
+    if (config.usage?.providers?.[id]?.timeoutSeconds === undefined) usage.providers[id].timeoutSeconds = timeoutMs / 1000;
+  }
+  return { ...config, timeoutMs, usage };
 }
 
 async function readCache(cachePath) {
@@ -289,7 +316,7 @@ async function readCache(cachePath) {
     if (json.version !== 1 || !Array.isArray(json.providers)) return {};
     return Object.fromEntries(['codex', 'antigravity', 'claude'].map((id) => {
       const value = json.providers.find((item) => item?.id === id);
-      return [id, id === 'claude' ? normalizeCachedProvider(value, id) : cachedProvider(value, id)];
+      return [id, normalizeCachedProvider(value, id)];
     }));
   } catch { return {}; }
 }
@@ -302,6 +329,9 @@ function normalizeCachedProvider(value, id) {
     status: good ? value.status === 'ok' ? 'ok' : 'stale' : id !== 'codex' && value?.status === 'disconnected' ? 'disconnected' : 'unavailable',
     checkedAt: good?.checkedAt ?? null, attemptedAt: timestamp(value?.attemptedAt), windows: good?.windows ?? [],
     error: Object.values(ERRORS).includes(value?.error) ? value.error : null,
+    errorCode: Object.hasOwn(ERRORS, value?.errorCode) ? value.errorCode : null,
+    durationMs: Number.isFinite(value?.durationMs) ? Math.min(120000, Math.max(0, Math.round(value.durationMs))) : null,
+    consecutiveFailures: Number.isInteger(value?.consecutiveFailures) ? Math.min(100000, Math.max(0, value.consecutiveFailures)) : 0,
     ...(nextAttemptAt ? { nextAttemptAt } : {}),
     ...(value?.disabled === true && value?.status === 'disconnected' ? { disabled: true } : {}),
   };
@@ -332,7 +362,6 @@ function failedSnapshot(code = 'CONFIG_ERROR', now = new Date().toISOString()) {
 }
 
 async function collectClaude(config, previous, options, attemptedAt, now) {
-  if (!config.claudeCredentialsPath) return { ...mergeProvider('claude', null, { status: 'disconnected' }, null, null), disabled: true };
   const next = Date.parse(previous?.nextAttemptAt);
   const attemptMs = Date.parse(attemptedAt);
   // A rate-limited response survives short-lived collector processes, so the
@@ -356,15 +385,28 @@ async function collect(rawConfig, options = {}) {
   const previous = await readCache(config.cachePath);
   const attemptedAt = now();
   const providers = await Promise.all(['codex', 'antigravity', 'claude'].map(async (id) => {
-    if (id === 'claude') return collectClaude(config, previous.claude, options, attemptedAt, now);
-    if (id === 'antigravity' && !config.agyPath) return { ...mergeProvider(id, null, { status: 'disconnected' }, null, null), disabled: true };
+    const optionalPath = id === 'claude' ? config.claudeCredentialsPath : config.agyPath;
+    if (id !== 'codex' && (config.providerEnabled?.[id] === false || (!optionalPath && config.providerEnabled?.[id] !== true))) {
+      return { ...mergeProvider(id, null, { status: 'disconnected' }, null, null), disabled: true };
+    }
+    const timing = config.usage.providers[id];
+    const lastAttempt = Date.parse(previous[id]?.attemptedAt);
+    const elapsed = Date.parse(attemptedAt) - lastAttempt;
+    if (!options.forceRefresh && elapsed >= 0 && elapsed < timing.intervalSeconds * 1000) return previous[id];
+    const started = Date.now();
+    const measured = value => ({ ...value, durationMs: Math.min(120000, Date.now() - started) });
+    if (id === 'claude') {
+      if (!optionalPath) return measured(mergeProvider(id, previous[id], { status: 'rejected', reason: failure('CONFIG_ERROR') }, attemptedAt, null));
+      const result = await collectClaude({ ...config, timeoutMs: timing.timeoutSeconds * 1000 }, previous.claude, options, attemptedAt, now);
+      return result === previous.claude ? result : measured(result);
+    }
     try {
       const windows = await run(id === 'codex' ? config.codexPath : config.agyPath,
         id === 'codex' ? ['app-server', '--listen', 'stdio://'] : ['--print', '/usage', '--output-format', 'json'],
-        { cwd: config.workDir, env: buildEnvironment(config, id), timeoutMs: config.timeoutMs, signal: options.signal, protocol: id === 'codex' ? 'codex' : 'antigravity' });
-      return mergeProvider(id, previous[id], { status: 'fulfilled', value: windows }, attemptedAt, now());
+        { cwd: config.workDir, env: buildEnvironment(config, id), timeoutMs: timing.timeoutSeconds * 1000, signal: options.signal, protocol: id === 'codex' ? 'codex' : 'antigravity' });
+      return measured(mergeProvider(id, previous[id], { status: 'fulfilled', value: windows }, attemptedAt, now()));
     } catch (reason) {
-      return mergeProvider(id, previous[id], { status: 'rejected', reason }, attemptedAt, null);
+      return measured(mergeProvider(id, previous[id], { status: 'rejected', reason }, attemptedAt, null));
     }
   }));
   const snapshot = { version: 1, updatedAt: now(), providers };
@@ -372,4 +414,4 @@ async function collect(rawConfig, options = {}) {
   return snapshot;
 }
 
-module.exports = { MAX_OUTPUT_BYTES, ERRORS, failure, sanitizedError, timestamp, percent, parseCodex, parseAntigravity, cachedProvider, mergeProvider, buildEnvironment, killOwnedChild, runProcess, validateConfig, readCache, writeCache, failedSnapshot, collect };
+module.exports = { MAX_OUTPUT_BYTES, ERRORS, failure, sanitizedError, timestamp, percent, parseCodex, parseAntigravity, cachedProvider, mergeProvider, buildEnvironment, killOwnedChild, closeOwnedChild, runProcess, validateConfig, readCache, writeCache, failedSnapshot, collect };

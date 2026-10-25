@@ -7,4 +7,5 @@ $lock = $null
 try {
     $lock = [IO.File]::Open((Join-Path $base 'prepare.lock'),'OpenOrCreate','ReadWrite','None')
     if (-not (Test-Path -LiteralPath (Join-Path $base 'activation.json'))) { Invoke-UsageCopyCleanup $ProjectRoot }
+    Remove-UsageCopyOldLaunchReports $ProjectRoot
 } catch { } finally { if ($lock) { $lock.Dispose() } }

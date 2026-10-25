@@ -74,18 +74,32 @@ function ConvertFrom-UsageStoreUpdates {
 }
 
 function Get-UsageStoreStatus {
-    param($Target, [string]$RunningPackageFullName)
-    $installed = @(ConvertFrom-UsageStoreTable (Invoke-UsageStoreCommand installed))
-    $matches = @($installed | Where-Object { $_.Name -ceq 'ChatGPT' -and $_.Publisher -ceq 'OpenAI' })
-    if ($matches.Count -ne 1 -or -not $matches[0].PSObject.Properties['Version']) { throw 'The installed ChatGPT package is not uniquely recognized by Microsoft Store.' }
-    $version = ($Target.packageFullName -split '_')[1]
-    if ($matches[0].Version -cne $version) { throw 'Store metadata and the installed package version disagree. Retry after Store finishes refreshing.' }
-    $available = ConvertFrom-UsageStoreUpdates (Invoke-UsageStoreCommand updates)
+    param($Target, [string]$RunningPackageFullName, [switch]$LocalOnly)
+    # The registered package is authoritative for the local copy. Store catalog
+    # metadata can lag behind an already completed deployment or be unavailable.
+    if ($Target.packageFullName -cnotmatch '^OpenAI\.Codex_([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)_x64__2p2nqsd0c76g0$') { throw 'Unrecognized installed package identity.' }
+    $version = $Matches[1]
     $copyOld = -not [string]::IsNullOrWhiteSpace($RunningPackageFullName) -and $RunningPackageFullName -cne $Target.packageFullName
+    $available = $false; $storeStatus = 'unchecked'; $storeError = $null; $storeCheckedAt = $null
+    if (-not $LocalOnly) {
+        $storeCheckedAt = [DateTime]::UtcNow.ToString('o')
+        try {
+            $installed = @(ConvertFrom-UsageStoreTable (Invoke-UsageStoreCommand installed))
+            $entries = @($installed | Where-Object { $_.Name -ceq 'ChatGPT' -and $_.Publisher -ceq 'OpenAI' })
+            if ($entries.Count -ne 1 -or -not $entries[0].PSObject.Properties['Version']) { throw 'Unrecognized Store metadata.' }
+            if ($entries[0].Version -cne $version) { $storeError = 'metadata-pending'; throw 'Store metadata is refreshing.' }
+            $available = ConvertFrom-UsageStoreUpdates (Invoke-UsageStoreCommand updates)
+            $storeStatus = if ($available) { 'available' } else { 'current' }
+        } catch {
+            $storeStatus = 'error'
+            if (-not $storeError) { $storeError = 'query-failed' }
+        }
+    }
     return [pscustomobject]@{
-        schemaVersion = 1; status = $(if ($available -or $copyOld) { 'available' } else { 'current' })
+        schemaVersion = 1; status = $(if ($available -or $copyOld) { 'available' } elseif ($storeStatus -eq 'current') { 'current' } elseif ($storeStatus -eq 'error') { 'error' } else { 'unknown' })
         checkedAt = [DateTime]::UtcNow.ToString('o'); installedPackage = $Target.packageFullName
         installedVersion = $version; storeUpdateAvailable = [bool]$available; copyUpdateRequired = [bool]$copyOld
+        storeStatus = $storeStatus; storeCheckedAt = $storeCheckedAt; storeError = $storeError
     }
 }
 
@@ -101,13 +115,13 @@ function Invoke-UsageUpdateFlow {
     $before = & $GetTarget
     & $Log "Installed package: $($before.packageFullName)"
     $state = & $Check $before
-    if ($state.status -notin @('current','available')) { throw 'Update check did not produce a usable result.' }
+    if ($state.status -notin @('current','available')) { throw 'Microsoft Store could not be checked and no newer local original was confirmed. Retry Update.cmd later.' }
     if ($state.storeUpdateAvailable) {
         & $Guard
         & $Log 'Updating the original ChatGPT package through Microsoft Store.'
         & $Apply
-        # Store may return after queuing deployment. Require a newer registered
-        # version AND no remaining update before patching or launching anything.
+        # Store may return after queuing deployment. A newer registered package
+        # is required; unavailable/lagging catalog metadata cannot negate it.
         $completed = $false
         $oldVersion = [version](($before.packageFullName -split '_')[1])
         for ($i = 0; $i -lt $CompletionAttempts; $i++) {
@@ -117,13 +131,16 @@ function Invoke-UsageUpdateFlow {
                 $newVersion = [version](($after.packageFullName -split '_')[1])
                 if ($newVersion -gt $oldVersion) {
                     $verified = & $Check $after
-                    if ($verified.status -in @('current','available') -and -not $verified.storeUpdateAvailable) { $completed = $true; break }
+                    $catalogUnavailable = $verified.PSObject.Properties['storeStatus'] -and $verified.storeStatus -eq 'error'
+                    if (-not $verified.storeUpdateAvailable -and ($verified.status -in @('current','available') -or $catalogUnavailable)) { $completed = $true; break }
                 }
             } catch { if ($i -eq $CompletionAttempts - 1) { throw } }
             if ($i -lt $CompletionAttempts - 1) { & $Delay }
         }
         if (-not $completed) { throw 'Store update completion could not be verified. No copy was launched. Check Store and retry Update.cmd.' }
         & $Log "Verified updated package: $($after.packageFullName)"
+    } elseif ($state.PSObject.Properties['storeStatus'] -and $state.storeStatus -eq 'error') {
+        & $Log 'Store could not be checked. Preparing the copy from the already updated local original.'
     } else { & $Log 'No Store update is available. Preparing or reusing the current copy.' }
     & $Guard
     & $Launch

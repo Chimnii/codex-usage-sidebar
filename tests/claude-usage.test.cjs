@@ -114,7 +114,7 @@ test('Claude survives collector restarts, backs off after 429 and preserves last
 test('Claude initial errors stay unknown, and missing credentials stay disconnected', async t => {
   const config = fixture(t);
   for (const [code, expected] of [['CLAUDE_NOT_CONNECTED', 'disconnected'], ['TIMEOUT', 'unavailable']]) {
-    const result = await collect(config, { now: () => at, runProcessImpl: otherUsage, claudeRequestImpl: async () => { throw failure(code); } });
+    const result = await collect(config, { forceRefresh: true, now: () => at, runProcessImpl: otherUsage, claudeRequestImpl: async () => { throw failure(code); } });
     assert.equal(result.providers[2].status, expected);
     assert.deepEqual(result.providers[2].windows, []);
   }

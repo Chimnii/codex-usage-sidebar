@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..');
-const ROOTS=['.github','.gitattributes','.gitignore','LICENSE','LICENSES','README.md','README.ko.md','THIRD_PARTY_NOTICES.md','docs','patcher','collector','tweak','scripts','tests','package.json','package-lock.json','runtime.lock.json','Setup.cmd','Launch.cmd','Update.cmd','Restore.cmd','Uninstall.cmd'];
+const ROOTS=['.github','.gitattributes','.gitignore','LICENSE','LICENSES','README.md','README.ko.md','THIRD_PARTY_NOTICES.md','docs','patcher','collector','tweak','scripts','tests','package.json','package-lock.json','runtime.lock.json','Setup.cmd','Launch.cmd','Update.cmd','Restore.cmd','Doctor.cmd','Uninstall.cmd'];
 function listPublicFiles(base=root) {
   const files=[];
   function walk(rel) {

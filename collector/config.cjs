@@ -1,6 +1,8 @@
 'use strict';
 const path = require('node:path');
+const { normalizeUsageSettings } = require('./settings.cjs');
 function resolveConfig(config, file) {
+  config = { ...config, usage: normalizeUsageSettings(config?.usage) };
   if (!config.managedCopy) return config;
   const dataDir = path.dirname(path.resolve(file));
   const root = path.resolve(dataDir, '../..');

@@ -24,7 +24,7 @@ async function createUsageFixture(root, userSid) {
   }
   copyTree(fixture.layerSourceRoot, path.join(projectRoot, '.local/layer-source'));
   const runtime = path.join(projectRoot, '.local/layer-runtime');
-  write(runtime, 'main.js', 'var CODEX_PLUSPLUS_VERSION = "1.1.4";\nvar CODEX_CONFIG_FILE = (0, import_node_path6.join)((0, import_node_os2.homedir)(), ".codex", "config.toml");\n');
+  write(runtime, 'main.js', 'var CODEX_PLUSPLUS_VERSION = "1.1.4";\nvar CODEX_CONFIG_FILE = (0, import_node_path6.join)((0, import_node_os2.homedir)(), ".codex", "config.toml");\nfunction loadAllMainTweaks() {\n  syncMcpServersFromEnabledTweaks();\n}\n');
   write(runtime, 'runtime-paths.js', 'exports.CODEX_CONFIG_FILE = (0, node_path_1.join)((0, node_os_1.homedir)(), ".codex", "config.toml");\n');
   write(runtime, 'LICENSE', 'Synthetic runtime fixture. No application code.\n');
   write(runtime, 'preload.js', 'module.exports = {};\n');
