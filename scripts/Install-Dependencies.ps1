@@ -23,6 +23,8 @@ try {
         }
         if ((Get-FileHash -LiteralPath $zip).Hash -ine $runtime.sha256) { throw 'Node.js download checksum mismatch.' }
         Expand-Archive -LiteralPath $zip -DestinationPath $tools -Force
+    } else {
+        Write-Host "Reusing private Node.js $($runtime.version)."
     }
     if ((& $node --version) -cne ('v' + $runtime.version)) { throw 'Private Node.js version mismatch.' }
     $dependencies = Assert-AppPlainPath (Join-Path $local 'dependencies') -AllowMissing
@@ -34,6 +36,7 @@ try {
     $reusable = [IO.File]::Exists($receipt) -and [IO.File]::ReadAllText($receipt).Trim() -ceq $expected -and
         [IO.File]::Exists((Join-Path $layer 'assets/runtime/main.js')) -and [IO.File]::Exists((Join-Path $asar 'package.json'))
     if (-not $reusable) {
+        Write-Host 'Preparing project-local libraries (first setup, changed lock file, or missing files).'
         foreach ($name in @('package.json','package-lock.json')) { [IO.File]::Copy((Join-Path $ProjectRoot $name),(Join-Path $dependencies $name),$true) }
         $oldPath = $env:PATH
         try {
@@ -42,6 +45,8 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed. Retry Setup.cmd when the network is available.' }
         } finally { $env:PATH = $oldPath }
         [IO.File]::WriteAllText($receipt, $expected)
+    } else {
+        Write-Host 'Reusing project-local libraries (lock file unchanged).'
     }
     if ((Read-AppJson (Join-Path $layer 'package.json')).version -cne '1.1.4' -or (Read-AppJson (Join-Path $asar 'package.json')).version -cne '3.4.1') { throw 'Dependency version mismatch.' }
     # Read the upstream assets; never run Layer's installer against the Store app.

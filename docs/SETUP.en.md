@@ -5,6 +5,8 @@
 3. Launch **Codex Usage Sidebar** from the Start menu and pin that shortcut to the taskbar.
 
 Initial setup needs internet access. It verifies and installs a private Node runtime and pinned dependencies under `.local`; system Node and PATH are unchanged.
+Setup prepares this private environment once even if the app previously used another Node or a development environment.
+Later runs reuse the matching Node version and libraries. Libraries are reinstalled only when the lock file changes or required files are missing; existing provider settings are preserved.
 Use one app at a time: the copy and original share login, conversations, and settings.
 
 | Command | Purpose |

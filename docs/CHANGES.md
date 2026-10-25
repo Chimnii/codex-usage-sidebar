@@ -2,6 +2,7 @@
 
 ## 1.1.0
 
+- Fix Setup and Uninstall in fresh PowerShell processes by importing their settings module explicitly; clarify private dependency reuse.
 - Restore a verified previous copy even when the active copy is damaged; keep bounded recovery evidence.
 - Preserve the last usage values while reporting IPC failures and delayed data accurately.
 - Separate local repatch detection from Microsoft Store connectivity and guard direct launch during updates.

@@ -2,6 +2,7 @@
 param([string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'UsageCopy.Common.psm1') -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'Environment.Common.psm1') -DisableNameChecking
 Import-Module (Join-Path $ProjectRoot 'patcher/AppPatch.Common.psm1') -DisableNameChecking
 Assert-UsageCopyStopped
 $ProjectRoot = Get-AppDirectory $ProjectRoot

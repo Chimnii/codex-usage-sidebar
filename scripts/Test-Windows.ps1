@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $env:PSModulePath = (Join-Path $PSHOME 'Modules') + ';' + $env:PSModulePath
 $root = Split-Path $PSScriptRoot -Parent
 $shell = (Get-Process -Id $PID).Path
-foreach ($name in @('patcher','repatch-workflow','usage-environment','usage-copy','usage-update','update-entry','release-setup')) {
+foreach ($name in @('patcher','repatch-workflow','usage-environment','usage-copy','usage-update','update-entry','release-setup','setup-entry')) {
     & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root ('tests/' + $name + '.test.ps1'))
     if ($LASTEXITCODE -ne 0) { throw "Failed: $name" }
 }

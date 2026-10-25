@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($EnableClaude -and $DisableClaude) { throw 'Choose EnableClaude or DisableClaude, not both.' }
 Import-Module (Join-Path $PSScriptRoot 'UsageCopy.Common.psm1') -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot 'Environment.Common.psm1') -DisableNameChecking
 Import-Module (Join-Path $ProjectRoot 'patcher/AppPatch.Common.psm1') -DisableNameChecking
 if (-not $DependenciesOnly) { Assert-UsageCopyStopped }
 $environment = & (Join-Path $PSScriptRoot 'Install-Dependencies.ps1') -ProjectRoot $ProjectRoot
