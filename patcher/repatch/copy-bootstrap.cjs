@@ -2,6 +2,76 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const APP_ID = 'Local.CodexUsageSidebar';
+const DISPLAY_NAME = 'ChatGPT with usage';
+
+function displayTitle(title) {
+  const value = String(title || '').trim();
+  if (!value || /^(ChatGPT|Codex)$/i.test(value) || value.toLowerCase() === DISPLAY_NAME.toLowerCase()) return DISPLAY_NAME;
+  if (value.endsWith(' — ' + DISPLAY_NAME)) return value;
+  return value.replace(/\s+[-–—|·]\s+(?:ChatGPT|Codex)$/i, '') + ' — ' + DISPLAY_NAME;
+}
+
+function installWindowIdentity(electron, root, dependencies = {}) {
+  const { app, BrowserWindow, nativeTheme } = electron;
+  if (typeof app.on !== 'function') return;
+  const exists = dependencies.existsFile || fs.existsSync;
+  const executable = path.join(root, 'app', 'ChatGPT.exe');
+  const seen = new WeakSet();
+  const nativeApplied = new WeakMap();
+  const safely = action => { try { action(); } catch (error) { (dependencies.warn || console.warn)('[usage-sidebar] Window appearance:', error.message); } };
+  const iconPath = () => {
+    const dark = nativeTheme?.shouldUseDarkColorsForSystemIntegratedUI ?? nativeTheme?.shouldUseDarkColors ?? false;
+    return ['chatgpt-app-' + (dark ? 'dark' : 'light') + '.ico', 'icon-chatgpt.ico']
+      .map(name => path.join(root, 'app/resources', name)).find(exists);
+  };
+  const apply = win => {
+    if (!win || win.isDestroyed?.()) return;
+    const icon = iconPath();
+    safely(() => win.setAppDetails?.({ appId: APP_ID, relaunchCommand: '"' + executable + '"', relaunchDisplayName: DISPLAY_NAME,
+      ...(icon ? { appIconPath: icon, appIconIndex: 0 } : {}) }));
+    if (icon) safely(() => win.setIcon?.(icon));
+    // Owl currently omits setAppDetails. Use Windows' property store only for
+    // that missing API; keep the original app, binary resources and profile intact.
+    if (typeof win.setAppDetails !== 'function' && typeof win.getNativeWindowHandle === 'function' &&
+        dependencies.projectRoot && nativeApplied.get(win) !== (icon || executable)) {
+      safely(() => {
+        const handle = win.getNativeWindowHandle();
+        const number = handle.length === 8 ? handle.readBigUInt64LE() : BigInt(handle.readUInt32LE());
+        const proc = dependencies.process || process;
+        const spawn = dependencies.spawn || require('node:child_process').spawn;
+        const child = spawn(path.join(proc.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(dependencies.projectRoot, 'scripts/Set-UsageWindowIdentity.ps1'),
+            '-WindowHandle', number.toString(), '-Executable', executable, '-IconPath', icon || executable],
+          { windowsHide: true, stdio: 'ignore', timeout: 15000 });
+        nativeApplied.set(win, icon || executable);
+        child.on('error', error => { nativeApplied.delete(win); (dependencies.warn || console.warn)('[usage-sidebar] Window identity:', error.message); });
+        child.on('exit', code => { if (code) nativeApplied.delete(win); });
+        child.unref();
+      });
+    }
+  };
+  const attach = win => {
+    if (!win || seen.has(win) || win.isDestroyed?.()) return;
+    seen.add(win);
+    // Only presentation changes. Leave app.getName(), userData, sessionData and
+    // all other profile paths under the original application's control.
+    if (typeof win.setTitle === 'function') {
+      const setTitle = win.setTitle.bind(win);
+      win.setTitle = title => setTitle(displayTitle(title));
+      win.on?.('page-title-updated', (event, title) => {
+        event.preventDefault();
+        if (!win.isDestroyed?.()) win.setTitle(title);
+      });
+      win.setTitle(win.getTitle?.());
+    }
+    apply(win);
+  };
+  app.on('browser-window-created', (_event, win) => attach(win));
+  const update = () => { for (const win of BrowserWindow?.getAllWindows?.() || []) apply(win); };
+  nativeTheme?.on?.('updated', update);
+  app.once?.('will-quit', () => nativeTheme?.removeListener?.('updated', update));
+  app.whenReady?.().then(() => { for (const win of BrowserWindow?.getAllWindows?.() || []) attach(win); }).catch(() => {});
+}
 
 function updateInProgress(projectRoot, token, dependencies = {}) {
   if (!projectRoot || !path.isAbsolute(projectRoot)) return false;
@@ -69,11 +139,13 @@ function initialize(archiveDir, dependencies = {}) {
   });
   // Bootstrap runs before Layer and the app's own bootstrap. Its later setter
   // must use the same version-independent ID as the direct-EXE shortcut.
-  const { app } = load('electron');
+  const electron = load('electron');
+  const { app } = electron;
   if (proc.platform === 'win32') {
     const nativeSetId = app.setAppUserModelId.bind(app);
     app.setAppUserModelId = () => nativeSetId(APP_ID);
     app.setAppUserModelId(APP_ID);
+    installWindowIdentity(electron, root, { ...dependencies, projectRoot: config.projectRoot });
   }
   // Small, hidden local cleanup only: no Store query, app launch or patching.
   // This retires legacy directories after the old running copy has finally quit.
@@ -88,4 +160,4 @@ function initialize(archiveDir, dependencies = {}) {
   }
   return { root, layerRoot, appUserModelId: APP_ID, packageFullName: config.packageFullName };
 }
-module.exports = { initialize, updateInProgress, APP_ID };
+module.exports = { initialize, updateInProgress, installWindowIdentity, displayTitle, APP_ID, DISPLAY_NAME };

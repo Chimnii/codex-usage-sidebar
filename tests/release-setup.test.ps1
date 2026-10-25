@@ -251,7 +251,7 @@ Case 'uninstall planning preserves copy and user data' {
 Case 'uninstall removes only the managed copy and leaves original and profile' {
     if (-not ('UsageSidebar.ShortcutProperties' -as [type])) { Add-Type -Path (Join-Path $project 'scripts/ShortcutProperties.cs') }
     $copy=Read-UsageCopyCurrent $project
-    $owned=Join-Path $project 'ChatGPT with Usage.lnk'
+    $owned=Join-Path $project 'ChatGPT with usage.lnk'
     $legacy=Join-Path $project 'Old custom copy name.lnk'
     $foreign=Join-Path $project 'ChatGPT.lnk'
     foreach ($link in @($owned,$legacy)) { [UsageSidebar.ShortcutProperties]::Create($link,(Join-Path $copy.appDir 'ChatGPT.exe'),$copy.appDir) }

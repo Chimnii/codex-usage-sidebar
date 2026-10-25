@@ -44,5 +44,5 @@ $prepared = & (Join-Path $PSScriptRoot 'Prepare-UsageCopy.ps1') -ProjectRoot $Pr
 $hold = Join-Path $ProjectRoot '.local/copy/restore-hold.json'
 if ([IO.File]::Exists($hold)) { Remove-Item -LiteralPath $hold }
 & (Join-Path $PSScriptRoot 'Install-UsageShortcut.ps1') -ProjectRoot $ProjectRoot -UpdateExistingPin | Out-Host
-Write-Host 'Setup complete. Open ChatGPT with Usage from the Start menu. Right-click its shortcut and choose Pin to taskbar once; existing pins are updated automatically.'
+Write-Host 'Setup complete. Open ChatGPT with usage from the Start menu. Right-click its shortcut and choose Pin to taskbar once; existing pins are updated automatically.'
 $prepared

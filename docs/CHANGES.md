@@ -2,7 +2,8 @@
 
 ## 1.1.0
 
-- Name the managed-copy shortcuts ChatGPT with Usage; migrate owned legacy shortcuts and update existing pins by target without changing original-app shortcuts.
+- Use ChatGPT with usage for shortcut and window display names, preserve conversation titles and profile identity, and reuse the original app's themed icons.
+- Name the managed-copy shortcuts ChatGPT with usage; migrate owned legacy shortcuts and update existing pins by target without changing original-app shortcuts.
 - Clarify that hovering reveals a manual refresh button and that display preferences live in the settings file.
 - Fix Setup and Uninstall in fresh PowerShell processes by importing their settings module explicitly; clarify private dependency reuse.
 - Restore a verified previous copy even when the active copy is damaged; keep bounded recovery evidence.

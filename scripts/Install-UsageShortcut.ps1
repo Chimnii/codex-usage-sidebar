@@ -12,6 +12,9 @@ $exe = Join-Path $copy.appDir 'ChatGPT.exe'
 $base = Join-Path $ProjectRoot '.local/copy'
 if (-not ('UsageSidebar.ShortcutProperties' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'ShortcutProperties.cs') }
 $displayName = [UsageSidebar.ShortcutProperties]::DisplayName
+# Match the original app's system-integrated icon, using its unchanged ICO assets.
+$systemLight = Get-ItemPropertyValue -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name SystemUsesLightTheme -ErrorAction SilentlyContinue
+$iconPath = [UsageSidebar.ShortcutProperties]::GetIconPath($exe, ($null -ne $systemLight -and $systemLight -eq 0))
 $paths = @()
 $legacyLinks = @()
 function Test-OwnedShortcut([string]$Path) {
@@ -57,13 +60,17 @@ foreach ($linkPath in $paths) {
     [void][IO.Directory]::CreateDirectory((Split-Path $full -Parent))
     if (Test-Path -LiteralPath $full) {
         Save-ShortcutBackup $full
+        $existing = Get-Item -LiteralPath $full
+        $newName = [IO.Path]::GetFileName($full)
+        if ($existing.Name -cne $newName) { Rename-Item -LiteralPath $existing.FullName -NewName $newName }
     }
-    [UsageSidebar.ShortcutProperties]::Create($full,$exe,$copy.appDir)
-    [UsageSidebar.ShortcutProperties]::Apply($full,'Local.CodexUsageSidebar',$exe)
+    [UsageSidebar.ShortcutProperties]::Create($full,$exe,$copy.appDir,$iconPath)
+    [UsageSidebar.ShortcutProperties]::Apply($full,'Local.CodexUsageSidebar',$exe,$iconPath)
     $readback = [UsageSidebar.ShortcutProperties]::Read($full)
     $id = [UsageSidebar.ShortcutProperties]::ReadAppId($full)
     if ($readback.TargetPath -ine $exe -or $readback.Arguments -ne '' -or $id -cne 'Local.CodexUsageSidebar' -or
-        $readback.Description -cne $displayName -or [UsageSidebar.ShortcutProperties]::ReadDisplayName($full) -cne $displayName) { throw "Shortcut readback failed: $full" }
+        $readback.Description -cne $displayName -or [UsageSidebar.ShortcutProperties]::ReadDisplayName($full) -cne $displayName -or
+        $readback.IconPath -ine $iconPath -or [UsageSidebar.ShortcutProperties]::ReadRelaunchIcon($full) -ine ($iconPath + ',0')) { throw "Shortcut readback failed: $full" }
     [pscustomobject]@{ path=$full; target=$readback.TargetPath; arguments=$readback.Arguments; appUserModelId=$id; displayName=$displayName; icon=$readback.IconPath }
 }
 # Retire only obsolete aliases that resolve to this project's managed copy.

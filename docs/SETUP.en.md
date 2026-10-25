@@ -2,12 +2,15 @@
 
 1. On Windows x64, open the original Microsoft Store app and sign in once.
 2. Keep this project in a permanent folder. Fully quit the app and run **Setup.cmd**.
-3. Launch **ChatGPT with Usage** from the Start menu. Right-click the shortcut and choose **Pin to taskbar** once. Later Setup runs update existing pins pointing to this copy, regardless of their filename.
+3. Launch **ChatGPT with usage** from the Start menu. Right-click the shortcut and choose **Pin to taskbar** once. Later Setup runs update existing pins pointing to this copy, regardless of their filename.
 
 Initial setup needs internet access. It verifies and installs a private Node runtime and pinned dependencies under `.local`; system Node and PATH are unchanged.
 Setup prepares this private environment once even if the app previously used another Node or a development environment.
 Later runs reuse the matching Node version and libraries. Libraries are reinstalled only when the lock file changes or required files are missing; existing provider settings are preserved.
 Use one app at a time: the copy and original share login, conversations, and settings.
+The copy is displayed as **ChatGPT with usage** and reuses the original app's icon files.
+Window titles retain the conversation name alongside the app name; profile and cache paths are unchanged.
+After changing the Windows theme, run `scripts/Install-UsageShortcut.ps1 -UpdateExistingPin` if a pinned shortcut still uses the previous theme's icon.
 
 | Command | Purpose |
 |---|---|

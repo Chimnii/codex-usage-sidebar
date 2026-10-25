@@ -194,11 +194,20 @@ Run-Case 'file sharing failure cannot replace the running slot bytes and recover
 
 Run-Case 'direct executable shortcut has no CMD arguments and has the copy AppUserModelID' {
     $lnk = Join-Path $testRoot 'test shortcut.lnk'
+    $darkIcon=Join-Path $second.copy.appDir 'resources/chatgpt-app-dark.ico'
+    $lightIcon=Join-Path $second.copy.appDir 'resources/chatgpt-app-light.ico'
+    # Icon location properties do not decode the file. These are path-only fixtures.
+    [IO.File]::WriteAllText($darkIcon,'synthetic dark icon')
+    [IO.File]::WriteAllText($lightIcon,'synthetic light icon')
     $result = & (Join-Path $project 'scripts/Install-UsageShortcut.ps1') -ProjectRoot $project -OutputPath $lnk
     Assert-True ($result.target -ieq (Join-Path $second.copy.appDir 'ChatGPT.exe')) 'Not a direct EXE shortcut.'
     Assert-True ($result.arguments -ceq '' -and $result.appUserModelId -ceq 'Local.CodexUsageSidebar') 'Shell identity mismatch.'
-    Assert-True ($result.displayName -ceq 'ChatGPT with Usage') 'Copy display name is ambiguous.'
-    Assert-True ([UsageSidebar.ShortcutProperties]::ReadDisplayName($lnk) -ceq 'ChatGPT with Usage') 'Shell relaunch name not set.'
+    Assert-True ($result.displayName -ceq 'ChatGPT with usage') 'Copy display name is ambiguous.'
+    Assert-True ([UsageSidebar.ShortcutProperties]::ReadDisplayName($lnk) -ceq 'ChatGPT with usage') 'Shell relaunch name not set.'
+    Assert-True ($result.icon -in @($darkIcon,$lightIcon)) 'Shortcut did not use an original themed icon.'
+    Assert-True ([UsageSidebar.ShortcutProperties]::ReadRelaunchIcon($lnk) -ceq ($result.icon+',0')) 'Relaunch icon differs from shortcut.'
+    Assert-True ([UsageSidebar.ShortcutProperties]::GetIconPath($result.target,$true) -ceq $darkIcon) 'Dark system icon selection failed.'
+    Assert-True ([UsageSidebar.ShortcutProperties]::GetIconPath($result.target,$false) -ceq $lightIcon) 'Light system icon selection failed.'
 }
 
 Run-Case 'shortcut migration updates owned pins and preserves original-app links' {
@@ -225,15 +234,17 @@ Run-Case 'shortcut migration updates owned pins and preserves original-app links
     try {
         $env:APPDATA = $roaming
         & $installer -ProjectRoot $project -UpdateExistingPin -WhatIf | Out-Null
-        Assert-True ([IO.File]::Exists($oldMenu) -and -not [IO.File]::Exists((Join-Path $programs 'ChatGPT with Usage.lnk'))) 'WhatIf changed shortcuts.'
+        Assert-True ([IO.File]::Exists($oldMenu) -and -not [IO.File]::Exists((Join-Path $programs 'ChatGPT with usage.lnk'))) 'WhatIf changed shortcuts.'
         $null = & $installer -ProjectRoot $project -UpdateExistingPin
-        Assert-True ([IO.File]::Exists((Join-Path $programs 'ChatGPT with Usage.lnk'))) 'New Start-menu shortcut missing.'
+        Assert-True ([IO.File]::Exists((Join-Path $programs 'ChatGPT with usage.lnk'))) 'New Start-menu shortcut missing.'
         Assert-True (-not [IO.File]::Exists($oldMenu) -and -not [IO.File]::Exists($oldProject)) 'Owned legacy aliases remain.'
-        Assert-True ([IO.File]::Exists($pinned) -and [UsageSidebar.ShortcutProperties]::ReadDisplayName($pinned) -ceq 'ChatGPT with Usage') 'Existing pinned filename was not preserved and updated.'
+        Assert-True ([IO.File]::Exists($pinned) -and [UsageSidebar.ShortcutProperties]::ReadDisplayName($pinned) -ceq 'ChatGPT with usage') 'Existing pinned filename was not preserved and updated.'
         Assert-True ([UsageSidebar.ShortcutProperties]::ReadAppId($pinned) -ceq 'Local.CodexUsageSidebar') 'Pin grouping changed.'
         Assert-True ((Get-FileHash -LiteralPath $foreign).Hash -ceq $foreignBefore -and (Get-FileHash -LiteralPath $foreignPin).Hash -ceq $pinBefore) 'Original-app link changed.'
+        Rename-Item -LiteralPath (Join-Path $programs 'ChatGPT with usage.lnk') -NewName 'ChatGPT with Usage.lnk'
         $null = & $installer -ProjectRoot $project -UpdateExistingPin
-        Assert-True ([UsageSidebar.ShortcutProperties]::ReadDisplayName($pinned) -ceq 'ChatGPT with Usage') 'Repeated shortcut setup failed.'
+        Assert-True ([UsageSidebar.ShortcutProperties]::ReadDisplayName($pinned) -ceq 'ChatGPT with usage') 'Repeated shortcut setup failed.'
+        Assert-True ((Get-Item -LiteralPath (Join-Path $programs 'ChatGPT with usage.lnk')).Name -ceq 'ChatGPT with usage.lnk') 'Old shortcut casing remains.'
     } finally { $env:APPDATA = $previousAppData; [IO.File]::WriteAllText($installer,$source) }
 }
 

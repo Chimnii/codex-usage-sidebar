@@ -22,7 +22,7 @@ On Windows x64, install the original app from Microsoft Store and sign in once.
 Download the source into a permanent folder, fully quit the app, and run **Setup.cmd**.
 Setup installs a project-local Node runtime and pinned dependencies; administrator rights are not required.
 
-Launch **ChatGPT with Usage** from the Start menu. Right-click that shortcut and choose **Pin to taskbar** once; Setup updates existing pins but does not create new pins automatically.
+Launch **ChatGPT with usage** from the Start menu. Right-click that shortcut and choose **Pin to taskbar** once; Setup updates existing pins but does not create new pins automatically.
 Use **Help → Check for updates** or the update button at the bottom of the app to check for or apply updates.
 
 [Setup and recovery](docs/SETUP.en.md) · [Display options](docs/OPTIONS.md) · [Compatibility](docs/COMPATIBILITY.md)

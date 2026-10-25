@@ -57,23 +57,71 @@ namespace UsageSidebar {
         void Commit();
     }
     public static class ShortcutProperties {
-        public const string DisplayName = "ChatGPT with Usage";
+        public const string DisplayName = "ChatGPT with usage";
+        public static string GetIconPath(string executable, bool darkSystemTheme) {
+            string resources = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(executable), "resources");
+            string themed = System.IO.Path.Combine(resources, darkSystemTheme ? "chatgpt-app-dark.ico" : "chatgpt-app-light.ico");
+            if (System.IO.File.Exists(themed)) return themed;
+            string original = System.IO.Path.Combine(resources, "icon-chatgpt.ico");
+            return System.IO.File.Exists(original) ? original : executable;
+        }
         [DllImport("ole32.dll")] private static extern int PropVariantClear(ref PropVariant value);
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern void SHChangeNotify(uint eventId, uint flags, string item1, IntPtr item2);
+        [DllImport("shell32.dll")]
+        private static extern int SHGetPropertyStoreForWindow(IntPtr window, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr window);
         private static void Set(IPropertyStore store, uint id, string text) {
             PropertyKey key = new PropertyKey(id);
             PropVariant value = new PropVariant { type = 31, value = Marshal.StringToCoTaskMemUni(text) };
             try { store.SetValue(ref key, ref value); } finally { PropVariantClear(ref value); }
         }
+        public static bool ApplyWindow(IntPtr window, string id, string executable, string iconPath) {
+            if (!IsWindow(window)) return false;
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            using (var process = System.Diagnostics.Process.GetProcessById((int)processId)) {
+                if (!String.Equals(System.IO.Path.GetFullPath(process.MainModule.FileName), System.IO.Path.GetFullPath(executable), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Window does not belong to the selected app copy.");
+            }
+            Guid iid = typeof(IPropertyStore).GUID;
+            IPropertyStore store;
+            Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(window, ref iid, out store));
+            try {
+                Set(store, 5, id);
+                Set(store, 2, "\"" + executable + "\"");
+                Set(store, 3, iconPath + ",0");
+                Set(store, 4, DisplayName);
+                store.Commit();
+                return true;
+            } finally { Marshal.FinalReleaseComObject(store); }
+        }
+        public static string ReadWindowProperty(IntPtr window, uint id) {
+            Guid iid = typeof(IPropertyStore).GUID;
+            IPropertyStore store;
+            Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(window, ref iid, out store));
+            try {
+                PropertyKey key = new PropertyKey(id);
+                PropVariant value;
+                store.GetValue(ref key, out value);
+                try { return value.type == 31 ? Marshal.PtrToStringUni(value.value) : null; }
+                finally { PropVariantClear(ref value); }
+            } finally { Marshal.FinalReleaseComObject(store); }
+        }
         public static void Create(string linkPath, string executable, string workingDirectory) {
+            Create(linkPath, executable, workingDirectory, executable);
+        }
+        public static void Create(string linkPath, string executable, string workingDirectory, string iconPath) {
             object link = new ShellLink();
             try {
                 IShellLinkW target = (IShellLinkW)link;
                 target.SetPath(executable);
                 target.SetArguments("");
                 target.SetWorkingDirectory(workingDirectory);
-                target.SetIconLocation(executable, 0);
+                target.SetIconLocation(iconPath, 0);
                 target.SetDescription(DisplayName);
                 ((IPersistFile)link).Save(linkPath, true);
             } finally { Marshal.FinalReleaseComObject(link); }
@@ -96,6 +144,9 @@ namespace UsageSidebar {
             } finally { Marshal.FinalReleaseComObject(link); }
         }
         public static void Apply(string linkPath, string id, string executable) {
+            Apply(linkPath, id, executable, executable);
+        }
+        public static void Apply(string linkPath, string id, string executable, string iconPath) {
             object link = new ShellLink();
             try {
                 IPersistFile file = (IPersistFile)link;
@@ -103,7 +154,7 @@ namespace UsageSidebar {
                 IPropertyStore store = (IPropertyStore)link;
                 Set(store, 5, id);
                 Set(store, 2, "\"" + executable + "\"");
-                Set(store, 3, executable + ",0");
+                Set(store, 3, iconPath + ",0");
                 Set(store, 4, DisplayName);
                 store.Commit();
                 file.Save(linkPath, true);
@@ -115,6 +166,9 @@ namespace UsageSidebar {
         }
         public static string ReadDisplayName(string linkPath) {
             return ReadProperty(linkPath, 4);
+        }
+        public static string ReadRelaunchIcon(string linkPath) {
+            return ReadProperty(linkPath, 3);
         }
         private static string ReadProperty(string linkPath, uint id) {
             object link = new ShellLink();
