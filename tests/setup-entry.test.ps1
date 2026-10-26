@@ -38,7 +38,15 @@ function Get-UsageTarget {
 Export-ModuleMember -Function Get-UsageSettings, Get-UsageTarget
 '@
     [IO.File]::AppendAllText((Join-Path $f.projectRoot 'scripts/Environment.Common.psm1'), "`n" + $adapter, $utf8)
-    [IO.File]::AppendAllText((Join-Path $f.projectRoot 'scripts/UsageCopy.Common.psm1'), "`nfunction Get-UsageCopyBlockers { return @() }`nExport-ModuleMember -Function *-UsageCopy*, Copy-UsageAppTree`n", $utf8)
+    $processAdapter = @'
+function Get-UsageCopyBlockers {
+    $file=Join-Path (Split-Path $PSScriptRoot -Parent) '.local/process-fixture.json'
+    if ([IO.File]::Exists($file)) { return @(Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json) }
+    return @()
+}
+Export-ModuleMember -Function *-UsageCopy*, Copy-UsageAppTree
+'@
+    [IO.File]::AppendAllText((Join-Path $f.projectRoot 'scripts/UsageCopy.Common.psm1'), "`n"+$processAdapter, $utf8)
     Write-FixtureFile (Join-Path $f.projectRoot 'scripts/Install-Dependencies.ps1') @'
 param([string]$ProjectRoot)
 $ErrorActionPreference = 'Stop'
@@ -111,8 +119,36 @@ Case 'new settings setup succeeds in a fresh process with optional providers abs
     Invoke-Entry $f setup
     Assert-Prepared $f
     $saved = Get-Content -LiteralPath $f.settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    Assert-True ($saved.usage.language -eq 'auto' -and -not $saved.claudeEnabled -and $null -eq $saved.agyPath) 'Fresh setup optional defaults changed.'
+    Assert-True ($saved.usage.language -eq 'auto' -and $saved.claudeEnabled -and $null -eq $saved.agyPath) 'Fresh setup optional defaults changed.'
     Assert-True ($saved.codexHome -eq $f.settings.codexHome -and $saved.appData -eq $f.settings.appData) 'Fresh setup used the real profile.'
+}
+Case 'setup can prepare while the original is running and warns without touching it' {
+    $f = New-SetupFixture 'original-running'
+    Write-FixtureFile (Join-Path $f.projectRoot '.local/process-fixture.json') (@(@{ProcessId=12345;ExecutablePath=(Join-Path $f.appDir 'ChatGPT.exe')}) | ConvertTo-Json)
+    $before=Get-TreeFingerprint $f.appDir
+    Invoke-Entry $f setup
+    Assert-Prepared $f
+    Assert-True ((Get-TreeFingerprint $f.appDir) -ceq $before) 'Running original was changed.'
+    $log=[IO.File]::ReadAllText((Join-Path (Split-Path $f.projectRoot -Parent) 'setup.log'))
+    Assert-True ($log -match 'original ChatGPT app is still running') 'Missing original-running completion warning.'
+    $startup=Get-Content -LiteralPath (Join-Path $f.projectRoot '.local/copy/active/copy-startup.json') -Raw | ConvertFrom-Json
+    Assert-True ($startup.sourceAppDir -ceq $f.appDir) 'Direct-launch guard lost original executable location.'
+}
+Case 'setup refuses to replace a running managed copy before installing or changing settings' {
+    $f = New-SetupFixture 'copy-running'
+    Write-FixtureFile (Join-Path $f.projectRoot '.local/process-fixture.json') (@(@{ProcessId=12345;ExecutablePath=(Join-Path $f.projectRoot '.local/copy/active/app/ChatGPT.exe')}) | ConvertTo-Json)
+    $before=[IO.File]::ReadAllText($f.settingsPath)
+    $failure=$null
+    try { Invoke-Entry $f setup } catch { $failure=$_.Exception.Message }
+    Assert-True ($failure -match 'Close ChatGPT with usage') 'Running copy was not blocked clearly.'
+    Assert-True ([IO.File]::ReadAllText($f.settingsPath) -ceq $before) 'Blocked setup changed settings.'
+    Assert-True (-not [IO.File]::Exists((Join-Path $f.projectRoot '.local/dependencies-fixture.json'))) 'Blocked setup installed dependencies.'
+}
+Case 'an optional completion warning lookup failure does not fail completed setup' {
+    $f = New-SetupFixture 'warning-lookup-failure'
+    [IO.File]::AppendAllText((Join-Path $f.projectRoot 'scripts/UsageCopy.Common.psm1'), "`nfunction Get-UsageCopyOriginalProcesses { throw 'Synthetic warning lookup failure' }`nExport-ModuleMember -Function *-UsageCopy*, Copy-UsageAppTree`n", $utf8)
+    Invoke-Entry $f setup
+    Assert-Prepared $f
 }
 Case 'dependency-only fresh entry does not create settings or copies' {
     $f = New-SetupFixture 'dependencies'

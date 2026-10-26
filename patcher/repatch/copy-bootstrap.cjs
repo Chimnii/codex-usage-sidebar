@@ -4,11 +4,10 @@ const path = require('node:path');
 const APP_ID = 'Local.CodexUsageSidebar';
 const DISPLAY_NAME = 'ChatGPT with usage';
 
-function displayTitle(title) {
-  const value = String(title || '').trim();
-  if (!value || /^(ChatGPT|Codex)$/i.test(value) || value.toLowerCase() === DISPLAY_NAME.toLowerCase()) return DISPLAY_NAME;
-  if (value.endsWith(' — ' + DISPLAY_NAME)) return value;
-  return value.replace(/\s+[-–—|·]\s+(?:ChatGPT|Codex)$/i, '') + ' — ' + DISPLAY_NAME;
+function displayTitle() {
+  // Keep conversation names out of native window/taskbar captions. The app's
+  // own chat headings and document content remain under its control.
+  return DISPLAY_NAME;
 }
 
 function installWindowIdentity(electron, root, dependencies = {}) {
@@ -102,6 +101,35 @@ function updateInProgress(projectRoot, token, dependencies = {}) {
   return isLocked(path.join(base, 'update.lock'));
 }
 
+function originalAppRunning(config, dependencies = {}) {
+  const proc = dependencies.process || process;
+  const list = dependencies.listExecutablePaths || (() => {
+    const query = "$ErrorActionPreference='Stop'; $env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter \"Name = 'ChatGPT.exe'\" | Where-Object ExecutablePath | Select-Object -ExpandProperty ExecutablePath)";
+    const output = (dependencies.execFileSync || require('node:child_process').execFileSync)(
+      path.join(proc.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', query],
+      { windowsHide: true, timeout: 3000, maxBuffer: 65536, encoding: 'utf8' });
+    return JSON.parse(output.replace(/^\uFEFF/, '').trim());
+  });
+  try {
+    const source = typeof config.sourceAppDir === 'string' && path.win32.isAbsolute(config.sourceAppDir)
+      ? path.win32.join(config.sourceAppDir, 'ChatGPT.exe').toLowerCase() : null;
+    const paths = list();
+    if (!Array.isArray(paths)) throw new Error('Unexpected process list');
+    return paths.some(value => {
+      if (typeof value !== 'string') return false;
+      const file = path.win32.normalize(value);
+      return (source && file.toLowerCase() === source) ||
+        /\\WindowsApps\\OpenAI\.Codex_\d+\.\d+\.\d+\.\d+_x64__2p2nqsd0c76g0\\app\\ChatGPT\.exe$/i.test(file);
+    });
+  } catch (error) {
+    // This optional warning must not break startup when Windows process lookup
+    // is unavailable. The app's own single-instance behavior remains intact.
+    (dependencies.warn || console.warn)('[usage-sidebar] Original app check:', error.message);
+    return false;
+  }
+}
+
 function initialize(archiveDir, dependencies = {}) {
   const proc = dependencies.process || process;
   const load = dependencies.require || require;
@@ -122,6 +150,16 @@ function initialize(archiveDir, dependencies = {}) {
       : 'The update helper is waiting or preparing the copy. It will open the app when finished. To cancel, close the helper window, then try again.');
     app.exit(0);
     return { blocked: true };
+  }
+  if (proc.platform === 'win32' && originalAppRunning(config, dependencies)) {
+    const { app, dialog } = load('electron');
+    let korean = false;
+    try { korean = app.getLocale?.().startsWith('ko'); } catch { }
+    dialog.showErrorBox(DISPLAY_NAME, korean
+      ? '원본 ChatGPT가 실행 중입니다. 두 앱은 로그인, 대화와 프로필을 공유합니다. 원본 앱을 완전히 종료한 뒤 ChatGPT with usage를 다시 실행하세요. 원본 앱은 종료하지 않았습니다.'
+      : 'The original ChatGPT app is running. Both apps share your login, conversations and profile. Close the original completely, then open ChatGPT with usage again. The original app was left running.');
+    app.exit(0);
+    return { blocked: true, reason: 'original-running' };
   }
   const layerRoot = path.join(root, 'layer-data');
   const pkg = load('./package.json');
@@ -160,4 +198,4 @@ function initialize(archiveDir, dependencies = {}) {
   }
   return { root, layerRoot, appUserModelId: APP_ID, packageFullName: config.packageFullName };
 }
-module.exports = { initialize, updateInProgress, installWindowIdentity, displayTitle, APP_ID, DISPLAY_NAME };
+module.exports = { initialize, updateInProgress, originalAppRunning, installWindowIdentity, displayTitle, APP_ID, DISPLAY_NAME };

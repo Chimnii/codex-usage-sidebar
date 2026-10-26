@@ -389,6 +389,33 @@ function Get-UsageCopyBlockers {
         Select-Object ProcessId, ExecutablePath)
 }
 
+function Get-UsageCopyOriginalProcesses {
+    param([string]$SourceAppDir)
+    $sourceExe = if ($SourceAppDir) { Get-AppFullPath (Join-Path $SourceAppDir 'ChatGPT.exe') } else { $null }
+    return @(Get-UsageCopyBlockers | Where-Object {
+        $executable = [string]$_.ExecutablePath
+        $executable -and (($sourceExe -and $executable -ieq $sourceExe) -or
+            $executable.Replace('/','\') -match '(?i)\\WindowsApps\\OpenAI\.Codex_\d+\.\d+\.\d+\.\d+_x64__2p2nqsd0c76g0\\app\\ChatGPT\.exe$')
+    })
+}
+
+function Assert-UsageCopySetupStopped {
+    param([string]$ProjectRoot)
+    # Setup only writes its own copy. A readable Store original may remain open.
+    $copyRoot = Get-AppFullPath (Join-Path $ProjectRoot '.local/copy')
+    foreach ($process in @(Get-UsageCopyBlockers)) {
+        if (-not $process.ExecutablePath) { throw 'A ChatGPT process has an unknown path. Close it before setup so the running copy can be protected.' }
+        if (Test-AppPathInside $process.ExecutablePath $copyRoot) { throw 'Close ChatGPT with usage before running Setup. The original Store app may stay open. No process was stopped.' }
+    }
+}
+
+function Assert-UsageCopyLaunchReady {
+    if (@(Get-UsageCopyOriginalProcesses).Count) {
+        throw 'The original ChatGPT app is running. Close it before opening ChatGPT with usage; both apps share the same login, conversations and profile. No process was stopped.'
+    }
+    Assert-UsageCopyStopped
+}
+
 function Get-UsageCopyProperty {
     param($Value, [string]$Name, $Default = $null)
     if ($null -ne $Value -and $null -ne $Value.PSObject.Properties[$Name]) { return $Value.$Name }

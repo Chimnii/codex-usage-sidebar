@@ -18,7 +18,7 @@ if ($CheckOnly) {
 [void][IO.Directory]::CreateDirectory($base)
 $lock = [IO.File]::Open((Join-Path $base 'start.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 try {
-    Assert-UsageCopyStopped
+    Assert-UsageCopyLaunchReady
     if ([IO.File]::Exists((Join-Path $base 'activation.json'))) {
         # Recover before reading a pointer whose active directory may be in
         # transit. Keep the same start -> prepare lock order as preparation.
@@ -35,7 +35,7 @@ try {
     $prepared = if ($held) { [pscustomobject]@{copy=$selected} } else { & (Join-Path $PSScriptRoot 'Prepare-UsageCopy.ps1') -ProjectRoot $configuration.root -Confirm:$false }
     if (-not $held -and [IO.File]::Exists($holdPath)) { Remove-Item -LiteralPath $holdPath }
     $copy = $prepared.copy
-    Assert-UsageCopyStopped
+    Assert-UsageCopyLaunchReady
     Assert-UsageCopyPair $copy
     $launchId = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8)
     $launches = Join-Path $base 'launches'

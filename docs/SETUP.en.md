@@ -1,7 +1,7 @@
 # Setup and recovery
 
 1. On Windows x64, open the original Microsoft Store app and sign in once.
-2. Keep this project in a permanent folder. Fully quit the app and run **Setup.cmd**.
+2. Keep this project in a permanent folder. Close **ChatGPT with usage** if it is running and run **Setup.cmd**. The Store original may stay open.
 3. Launch **ChatGPT with usage** from the Start menu. Right-click the shortcut and choose **Pin to taskbar** once. Later Setup runs update existing pins pointing to this copy, regardless of their filename.
 
 Setup.cmd keeps the success or failure result visible until you press a key.
@@ -12,8 +12,9 @@ Windows robocopy copies ordinary resources; inventory/size checks detect missing
 Setup prepares this private environment once even if the app previously used another Node or a development environment.
 Later runs reuse the matching Node version and libraries. Libraries are reinstalled only when the lock file changes or required files are missing; existing provider settings are preserved.
 Use one app at a time: the copy and original share login, conversations, and settings.
+Setup warns when the original is running. Launching the copy while the original is detected shows a warning and stops the new launch; close the original and try again.
 The copy is displayed as **ChatGPT with usage** and reuses the original app's icon files.
-Window titles retain the conversation name alongside the app name; profile and cache paths are unchanged.
+Window and taskbar titles stay **ChatGPT with usage**. In-app conversation headings, profile and cache paths are unchanged.
 After changing the Windows theme, run `scripts/Install-UsageShortcut.ps1 -UpdateExistingPin` if a pinned shortcut still uses the previous theme's icon.
 
 | Command | Purpose |
@@ -27,8 +28,8 @@ After changing the Windows theme, run `scripts/Install-UsageShortcut.ps1 -Update
 
 ## Optional providers
 
-Antigravity connects when its CLI is found at the default location. Claude is disabled on new installs.
-With the app closed, run in the project directory:
+Antigravity connects when its CLI is found at the default location. Claude is enabled on new installs and shows Disconnected when credentials are missing or expired.
+With the copy closed, run in the project directory:
 
 ```powershell
 .\scripts\Setup.ps1 -DisableAntigravity
@@ -39,7 +40,7 @@ With the app closed, run in the project directory:
 
 Claude reads existing Claude Code credentials. It does not sign in or refresh credentials. Direct OAuth usage queries are experimental; see [data and authentication (Korean)](DATA.md).
 Existing provider settings are preserved during setup. [Display and refresh options](OPTIONS.md) live under `usage` in `.local/settings.json`.
-After editing settings, close the app and run Setup.cmd. Do not share the settings file.
+After editing settings, close the copy and run Setup.cmd. Do not share the settings file.
 
 ## Updates and recovery
 

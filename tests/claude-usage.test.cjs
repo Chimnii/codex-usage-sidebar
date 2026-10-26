@@ -7,7 +7,7 @@ const path = require('node:path');
 const { ENDPOINT, MAX_RESPONSE_BYTES, parseClaude, requestClaudeUsage } = require('../collector/claude-usage.cjs');
 const { collect, failure } = require('../collector/collector.cjs');
 const { initialSnapshot, sanitizeSnapshot, mergeSnapshots, failedSnapshot } = require('../tweak/main-bridge.cjs');
-const { initialProviders, normalizeSnapshot, displayWindowLabel } = require('../tweak/index.js');
+const { initialProviders, normalizeSnapshot, displayWindowLabel, visibleProviders, viewSettings } = require('../tweak/index.js');
 
 const at = '2026-10-24T01:00:00.000Z';
 const usage = { five_hour: { utilization: 7, resets_at: '2026-10-24T05:00:00Z' }, seven_day: { utilization: 0, resets_at: '2026-10-25T07:00:00Z' }, seven_day_sonnet: null };
@@ -113,11 +113,52 @@ test('Claude survives collector restarts, backs off after 429 and preserves last
 
 test('Claude initial errors stay unknown, and missing credentials stay disconnected', async t => {
   const config = fixture(t);
-  for (const [code, expected] of [['CLAUDE_NOT_CONNECTED', 'disconnected'], ['TIMEOUT', 'unavailable']]) {
+  for (const [code, expected] of [['CLAUDE_NOT_CONNECTED', 'disconnected'], ['TIMEOUT', 'unavailable'], ['CLAUDE_AUTH_REQUIRED', 'disconnected']]) {
     const result = await collect(config, { forceRefresh: true, now: () => at, runProcessImpl: otherUsage, claudeRequestImpl: async () => { throw failure(code); } });
     assert.equal(result.providers[2].status, expected);
     assert.deepEqual(result.providers[2].windows, []);
   }
+});
+
+test('enabled Claude without usable credentials remains visible as disconnected without making a request', async t => {
+  for (const contents of [null, '{invalid', JSON.stringify({ claudeAiOauth: { accessToken: 'expired-fixture', expiresAt: 1 } })]) {
+    const config = fixture(t);
+    config.providerEnabled = { claude: true };
+    if (contents === null) fs.unlinkSync(config.claudeCredentialsPath);
+    else fs.writeFileSync(config.claudeCredentialsPath, contents);
+    let requests = 0;
+    const snapshot = await collect(config, { now: () => at, runProcessImpl: otherUsage,
+      claudeRequestImpl: c => requestClaudeUsage(c, { fetchImpl: async () => { requests++; throw new Error('unexpected request'); } }) });
+    const rendered = normalizeSnapshot(sanitizeSnapshot(snapshot), initialProviders());
+    const claude = visibleProviders(rendered, viewSettings()).find(p => p.id === 'claude');
+    assert.equal(requests, 0);
+    assert.equal(claude.status, 'disconnected');
+    assert.deepEqual(claude.windows, []);
+    assert.equal(claude.errorCode, contents === null ? 'CLAUDE_NOT_CONNECTED' : 'CLAUDE_AUTH_REQUIRED');
+  }
+});
+
+test('Claude explicit disable stays hidden, while an enabled provider without a path shows disconnected', async t => {
+  const config = fixture(t);
+  const options = { now: () => at, runProcessImpl: otherUsage, claudeRequestImpl: async () => { throw new Error('must not call'); } };
+  const enabled = await collect({ ...config, claudeCredentialsPath: null, providerEnabled: { claude: true } }, options);
+  assert.equal(enabled.providers[2].status, 'disconnected');
+  assert.equal(enabled.providers[2].errorCode, 'CLAUDE_NOT_CONNECTED');
+  assert.notEqual(enabled.providers[2].disabled, true);
+  const disabled = await collect({ ...config, providerEnabled: { claude: false } }, options);
+  const rendered = normalizeSnapshot(sanitizeSnapshot(disabled), initialProviders());
+  assert.equal(visibleProviders(rendered, viewSettings()).some(p => p.id === 'claude'), false);
+});
+
+test('Claude last successful values remain stale after credentials stop working', async t => {
+  const config = fixture(t);
+  const first = await collect(config, { now: () => at, runProcessImpl: otherUsage, claudeRequestImpl: async () => parseClaude(usage) });
+  const next = await collect(config, { now: () => '2026-10-24T01:01:00.000Z', runProcessImpl: otherUsage,
+    claudeRequestImpl: async () => { throw failure('CLAUDE_AUTH_REQUIRED'); } });
+  assert.equal(next.providers[2].status, 'stale');
+  assert.equal(next.providers[2].checkedAt, at);
+  assert.deepEqual(next.providers[2].windows, first.providers[2].windows);
+  assert.equal(next.providers[2].errorCode, 'CLAUDE_AUTH_REQUIRED');
 });
 
 test('Claude usage crosses IPC and renderer with short labels and retains values on failure', () => {

@@ -4,6 +4,8 @@
 
 An unofficial local extension that keeps GPT, Antigravity Gemini/Argon, and Claude usage always visible in the Codex Windows sidebar.
 
+![Usage gauges in the Codex sidebar; personal chat titles and profile details redacted](docs/images/usage-sidebar.png)
+
 - Usage gauges, percentages, and reset times, refreshed about once a minute
 - A separate app copy that preserves the original and uses your existing login and conversations
 - Taskbar shortcut, Store update checks, and automatic repatching after updates
@@ -19,7 +21,7 @@ Patches a separate copy to avoid Store directory write restrictions, sharing the
 ## Get started
 
 On Windows x64, install the original app from Microsoft Store and sign in once.
-Download the source into a permanent folder, fully quit the app, and run **Setup.cmd**.
+Download the source into a permanent folder, close **ChatGPT with usage** if it is running, and run **Setup.cmd**. The Store original can stay open during setup; close it before launching the copy.
 Setup installs a project-local Node runtime and pinned dependencies; administrator rights are not required.
 Keeps one app copy (about 2.4 GiB with the tested app version). Update staging is temporary; no previous-version backup is retained. **Restore.cmd** rebuilds from the installed original.
 
@@ -32,6 +34,6 @@ Run **Doctor.cmd** for a read-only health report. [Architecture and development 
 
 App binaries and account data are not distributed. The copy shares user data with the original app.
 This is not an official OpenAI product or an approved plugin; applicable service terms remain separate from the project license.
-Direct Claude OAuth usage queries are experimental and disabled by default on new installations.
+Claude usage is enabled by default on new installations and shows Disconnected until credentials are available. Its direct OAuth usage query is experimental; existing disabled settings are preserved.
 
 MIT · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Authentication and data handling (Korean)](docs/DATA.md)

@@ -1,8 +1,8 @@
 # Display and refresh options
 
-앱을 닫고 `.local/settings.json`의 `usage` 항목을 수정한 뒤 Setup.cmd를 실행하세요. 나머지 경로·계정 설정은 유지합니다.
+복사본을 닫고 `.local/settings.json`의 `usage` 항목을 수정한 뒤 Setup.cmd를 실행하세요. 나머지 경로·계정 설정은 유지합니다.
 
-Close the app, edit the optional `usage` object in `.local/settings.json`, and run Setup.cmd. Keep the other settings intact. Omitted values use the defaults.
+Close the copy, edit the optional `usage` object in `.local/settings.json`, and run Setup.cmd. Keep the other settings intact. Omitted values use the defaults.
 
 ```json
 {

@@ -144,7 +144,8 @@ function mergeProvider(id, previous, outcome, attemptedAt, checkedAt) {
     return { ...base, status: 'ok', checkedAt, windows: outcome.value, error: null, errorCode: null, consecutiveFailures: 0 };
   }
   const good = cachedProvider(previous, id);
-  return { ...base, status: good ? 'stale' : outcome.reason?.code === 'CLAUDE_NOT_CONNECTED' ? 'disconnected' : 'unavailable', checkedAt: good?.checkedAt ?? null, windows: good?.windows ?? [], error: sanitizedError(outcome.reason),
+  const disconnected = id === 'claude' && ['CLAUDE_NOT_CONNECTED', 'CLAUDE_AUTH_REQUIRED'].includes(outcome.reason?.code);
+  return { ...base, status: good ? 'stale' : disconnected ? 'disconnected' : 'unavailable', checkedAt: good?.checkedAt ?? null, windows: good?.windows ?? [], error: sanitizedError(outcome.reason),
     errorCode: Object.hasOwn(ERRORS, outcome.reason?.code) ? outcome.reason.code : 'BAD_RESPONSE',
     consecutiveFailures: Math.min(100000, (Number.isInteger(previous?.consecutiveFailures) ? previous.consecutiveFailures : 0) + 1) };
 }
@@ -396,7 +397,7 @@ async function collect(rawConfig, options = {}) {
     const started = Date.now();
     const measured = value => ({ ...value, durationMs: Math.min(120000, Date.now() - started) });
     if (id === 'claude') {
-      if (!optionalPath) return measured(mergeProvider(id, previous[id], { status: 'rejected', reason: failure('CONFIG_ERROR') }, attemptedAt, null));
+      if (!optionalPath) return measured(mergeProvider(id, previous[id], { status: 'rejected', reason: failure('CLAUDE_NOT_CONNECTED') }, attemptedAt, null));
       const result = await collectClaude({ ...config, timeoutMs: timing.timeoutSeconds * 1000 }, previous.claude, options, attemptedAt, now);
       return result === previous.claude ? result : measured(result);
     }

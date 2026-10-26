@@ -5,11 +5,11 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { installWindowIdentity, displayTitle, DISPLAY_NAME, APP_ID } = require('../patcher/repatch/copy-bootstrap.cjs');
 
-test('display titles preserve conversation names and do not duplicate the app suffix', () => {
-  for (const title of ['', 'ChatGPT', 'Codex', 'ChatGPT with Usage']) assert.equal(displayTitle(title), DISPLAY_NAME);
-  assert.equal(displayTitle('Planning'), 'Planning — ' + DISPLAY_NAME);
-  assert.equal(displayTitle('Planning — ChatGPT'), 'Planning — ' + DISPLAY_NAME);
-  assert.equal(displayTitle(displayTitle('Planning')), 'Planning — ' + DISPLAY_NAME);
+test('native titles always use the app name without conversation text', () => {
+  for (const title of ['', 'ChatGPT', 'Codex', 'ChatGPT with Usage', 'Planning', 'Planning — ChatGPT', 'Planning — ' + DISPLAY_NAME]) {
+    assert.equal(displayTitle(title), DISPLAY_NAME);
+  }
+  assert.equal(displayTitle(displayTitle('Planning')), DISPLAY_NAME);
 });
 
 test('window identity uses original themed icons, persists across title changes and leaves profile identity alone', async () => {
@@ -22,7 +22,7 @@ test('window identity uses original themed icons, persists across title changes 
   nativeTheme.shouldUseDarkColorsForSystemIntegratedUI = true;
   nativeTheme.shouldUseDarkColors = false;
   const win = new EventEmitter();
-  let title = 'ChatGPT', details, icon;
+  let title = 'Existing conversation — ChatGPT', details, icon;
   win.getTitle = () => title;
   win.setTitle = value => { title = value; };
   win.setAppDetails = value => { details = value; };
@@ -38,11 +38,11 @@ test('window identity uses original themed icons, persists across title changes 
     relaunchDisplayName: DISPLAY_NAME, appIconPath: path.join(root, 'app/resources/chatgpt-app-dark.ico'), appIconIndex: 0 });
   assert.equal(icon, details.appIconPath);
   win.setTitle('Existing conversation');
-  assert.equal(title, 'Existing conversation — ' + DISPLAY_NAME);
+  assert.equal(title, DISPLAY_NAME);
   let prevented = false;
   win.emit('page-title-updated', { preventDefault: () => { prevented = true; } }, 'Other conversation');
   assert.ok(prevented);
-  assert.equal(title, 'Other conversation — ' + DISPLAY_NAME);
+  assert.equal(title, DISPLAY_NAME);
   nativeTheme.shouldUseDarkColorsForSystemIntegratedUI = false;
   nativeTheme.emit('updated');
   assert.equal(icon, path.join(root, 'app/resources/chatgpt-app-light.ico'));

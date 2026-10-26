@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a README screenshot with personal chat titles and profile details redacted.
+- Allow setup while the Store original is running, warn at completion, and guard direct copy launches against a running original.
+- Enable Claude on new installations and show missing/expired credentials as Disconnected; preserve explicit disabled settings and previous successful values.
+- Keep window and taskbar titles fixed to ChatGPT with usage without exposing conversation names.
 - Show each setup phase on a separate line and keep Setup.cmd open after success or failure until a key is pressed.
 - Keep one managed app after updates; retain the old slot only during the swap. Restore.cmd now rebuilds from the installed original, including missing or damaged copies.
 - Copy resources with Windows robocopy and verify the file inventory and sizes. Generate the EXE/ASAR pair directly from the source and move it into staging without original-pair or duplicate patch backups.

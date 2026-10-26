@@ -15,7 +15,7 @@ for (const slot of ['staging', 'active', 'previous']) {
     const app = { setAppUserModelId: id => calls.push(id) };
     const environment = Object.fromEntries(['APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'CODEX_HOME'].map(k => [k, path.resolve('original-profile', k)]));
     const result = initialize(archive, {
-      process: { platform: 'win32', env }, skipMaintenance: true,
+      process: { platform: 'win32', env }, skipMaintenance: true, listExecutablePaths: () => [],
       readFile: file => { assert.equal(file, path.join(root, 'copy-startup.json')); return JSON.stringify({ schemaVersion: 1, appUserModelId: APP_ID, packageFullName: 'original-version', environment }); },
       require: name => name === './package.json' ? pkg : { app }
     });

@@ -109,7 +109,7 @@ try {
     $collectorConfig.cachePath = 'usage-cache.json'
     Write-AppJson $environment.collectorConfigPath $collectorConfig
     Write-AppJson (Join-Path $build 'copy-startup.json') ([pscustomobject]@{
-        schemaVersion=1; appUserModelId='Local.CodexUsageSidebar'; packageFullName=$target.packageFullName
+        schemaVersion=1; appUserModelId='Local.CodexUsageSidebar'; packageFullName=$target.packageFullName; sourceAppDir=$target.appDir
         projectRoot=$ProjectRoot
         environment=@{ APPDATA=$configuration.value.appData; LOCALAPPDATA=$configuration.value.localAppData; USERPROFILE=$configuration.value.userProfile; CODEX_HOME=$profiles.codexHome }
     })
