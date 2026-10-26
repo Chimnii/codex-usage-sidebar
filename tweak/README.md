@@ -5,7 +5,9 @@ collector and sends sanitized snapshots over IPC. update-bridge.cjs shares one S
 query and one timer between background checks and update-menu.cjs.
 
 The renderer reads memory every five seconds (15 seconds while hidden). IPC timeouts
-keep the last percentages, mark them delayed and allow later polling to recover.
+keep the last percentages and allow later polling to recover. A row-level delayed
+marker appears after three configured collection intervals without a successful
+reading; renderer polling does not count as a failed collection attempt.
 The small refresh button appears on hover or keyboard focus; window resume refreshes
 only when collection is due. Neither action bypasses Claude's retry backoff.
 

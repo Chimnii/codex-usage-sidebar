@@ -138,10 +138,17 @@ function start(api) {
   const updater = config?.projectRoot && process.env.SIDEBAR_USAGE_PACKAGE
     ? require('./update-bridge.cjs').createUpdateController({ projectRoot: config.projectRoot,
       dataDir: api.fs.dataDir, runningPackage: process.env.SIDEBAR_USAGE_PACKAGE, log: api.log }) : null;
-  let updateMenu = null;
+  let updateMenu = null, updateMenuError = null;
   if (updater) {
-    try { updateMenu = require('./update-menu.cjs').createUpdateMenu({ ...require('electron'), updater, log: api.log, language }); }
-    catch { api.log.warn('Help menu update integration is unavailable; automatic Store checks remain enabled.'); }
+    try {
+      // Electron exports are lazy getters. Enumerating all of them can load
+      // unrelated native modules unsupported by the Owl host and abort this hook.
+      const { Menu, dialog, BrowserWindow } = require('electron');
+      updateMenu = require('./update-menu.cjs').createUpdateMenu({ Menu, dialog, BrowserWindow, updater, log: api.log, language });
+    } catch {
+      updateMenuError = 'initialization-failed';
+      api.log.warn('Help menu update integration is unavailable (initialization-failed); automatic Store checks remain enabled.');
+    }
   }
 
   function record(extra = {}) {
@@ -149,7 +156,8 @@ function start(api) {
       startedAt: state.startedAt, intervalMs, cycles: state.cycles,
       collectorPid: state.child?.pid ?? null, active: !!state.child, stopped: state.stopped,
       updateMenuEntries: updateMenu?.getPatchedCount() ?? 0,
-      updateMenuHealth: updateMenu?.getHealth?.() ?? null,
+      updateMenuHealth: updateMenu?.getHealth?.() ?? (updateMenuError
+        ? { status: 'unavailable', patchedCount: 0, reason: updateMenuError } : null),
       updatedAt: state.snapshot.updatedAt, providers: state.snapshot.providers.map(p => ({ id: p.id, status: p.status, disabled: p.disabled === true,
         checkedAt: p.checkedAt, attemptedAt: p.attemptedAt, nextAttemptAt: p.nextAttemptAt,
         errorCode: p.errorCode, durationMs: p.durationMs, consecutiveFailures: p.consecutiveFailures })),

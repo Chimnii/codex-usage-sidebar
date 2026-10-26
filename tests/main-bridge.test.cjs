@@ -96,3 +96,84 @@ test('bridge coalesces refreshes, keeps one timer, exposes optional settings and
   finish(children[1]); assert.equal(writes.length, stoppedWrites); assert.equal(handlers.size, 0);
   assert.equal(timers.filter(t => !t.cancelled).length, 0); assert.equal(app.listenerCount('before-quit'), 0); assert.equal(processFake.listenerCount('exit'), 0);
 });
+
+function menuBridgeFixture({ brokenMenu = false } = {}) {
+  const vm = require('node:vm'), fs = require('node:fs'), path = require('node:path');
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const directory = path.resolve(__dirname, '../tweak'), handlers = new Map(), timers = [], writes = [], dialogs = [], warnings = [];
+  const app = new EventEmitter(); app.getLocale = () => 'en-US'; app.isReady = () => false;
+  const processFake = new EventEmitter();
+  Object.assign(processFake, { env: { SIDEBAR_USAGE_PACKAGE: 'fixture-package' }, platform: 'linux' });
+  const counts = { unsafeReads: 0, checks: 0, native: 0, stopped: 0 };
+  const updater = { check: async () => { counts.checks++; return { ok: true, state: { status: 'current' } }; },
+    getState: () => ({ status: 'current' }), stop: () => { counts.stopped++; } };
+  function build(template) { return { items: template.map(item => ({ enabled: true, ...item,
+    click: item.click ? (...args) => item.click(...args) : undefined,
+    submenu: Array.isArray(item.submenu) ? build(item.submenu) : item.submenu })) }; }
+  const Menu = { current: null, buildFromTemplate: build, getApplicationMenu() { return this.current; },
+    setApplicationMenu(menu) { this.current = menu; } };
+  if (brokenMenu) Menu.setApplicationMenu = null;
+  const originalBuild = Menu.buildFromTemplate, originalSet = Menu.setApplicationMenu;
+  const electron = { app, ipcMain: { removeHandler: channel => handlers.delete(channel.split(':').slice(-2).join(':')) }, Menu,
+    dialog: { showMessageBox: async (...args) => dialogs.push(args.at(-1)) }, BrowserWindow: { getFocusedWindow: () => null } };
+  // The deployed Owl shim advertises ImageView even though its native binding
+  // is absent. Importing that unrelated lazy export must not disable the menu.
+  Object.defineProperty(electron, 'ImageView', { enumerable: true, get() { counts.unsafeReads++; throw Error('No such binding was linked: electron_browser_image_view'); } });
+  const config = { nodePath: process.execPath, projectRoot: directory, workDir: directory, cachePath: path.join(directory, 'missing-cache.json'),
+    providerEnabled: { antigravity: false, claude: false }, usage: { language: 'en' } };
+  const child = new EventEmitter();
+  Object.assign(child, { pid: 1, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill() {} });
+  const imports = name => name === 'electron' ? electron
+    : name === 'node:fs' ? { existsSync: fs.existsSync, readFileSync: file => { if (file.endsWith('collector-config.json')) return JSON.stringify(config); throw Error('fixture missing'); }, writeFileSync: (_, data) => writes.push(JSON.parse(data)) }
+    : name === 'node:child_process' ? { spawn: () => child }
+    : name === './update-bridge.cjs' ? { createUpdateController: () => updater }
+    : name.startsWith('./') ? require(path.join(directory, name)) : require(name);
+  const context = { module: { exports: {} }, require: imports, __dirname: directory, process: processFake, Date,
+    setTimeout: (fn, ms) => { const timer = { fn, ms, unref() {} }; timers.push(timer); return timer; }, clearTimeout: timer => { if (timer) timer.cancelled = true; } };
+  vm.runInNewContext(fs.readFileSync(path.join(directory, 'main-bridge.cjs'), 'utf8'), context);
+  const bridge = context.module.exports;
+  bridge.start({ fs: { dataDir: directory }, manifest: { id: 'fixture' }, log: { warn: message => warnings.push(message) }, ipc: { handle: (name, fn) => handlers.set(name, fn) } });
+  function finish() { child.stdout.write(JSON.stringify(initialSnapshot())); child.exitCode = 0; child.emit('close', 0); }
+  function install() {
+    const log = { info() {} }, builtin = { checkForUpdates: () => counts.native++ };
+    function nativeCheck() { log.info('Check for updates requested via menu.'); return builtin.checkForUpdates(); }
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'help', submenu: [{ label: 'Check for Updates…', click: nativeCheck }] }]));
+    return Menu.current.items[0].submenu.items[0];
+  }
+  return { bridge, Menu, app, processFake, counts, writes, dialogs, warnings, handlers, timers, finish, install, originalBuild, originalSet };
+}
+
+test('main bridge installs the Store menu before app readiness without evaluating unrelated Electron exports', async () => {
+  const x = menuBridgeFixture();
+  try {
+    assert.equal(x.counts.unsafeReads, 0);
+    assert.equal(x.writes.at(-1).updateMenuHealth.status, 'pending');
+    const item = x.install(); x.finish();
+    assert.equal(x.writes.at(-1).updateMenuHealth.status, 'ok');
+    assert.equal(x.writes.at(-1).updateMenuEntries, 1);
+    await item.click();
+    assert.equal(x.counts.checks, 1); assert.equal(x.counts.native, 0);
+    assert.equal(x.dialogs[0].message, 'You are up to date.');
+    assert.equal(x.timers.filter(timer => !timer.cancelled).length, 1);
+    assert.deepEqual(x.warnings, []);
+  } finally { x.bridge.stop(); }
+  assert.equal(x.counts.stopped, 1); assert.equal(x.handlers.size, 0);
+  assert.equal(x.timers.filter(timer => !timer.cancelled).length, 0);
+  assert.equal(x.Menu.buildFromTemplate, x.originalBuild); assert.equal(x.Menu.setApplicationMenu, x.originalSet);
+  assert.equal(x.app.listenerCount('before-quit'), 0); assert.equal(x.processFake.listenerCount('exit'), 0);
+});
+
+test('failed menu initialization records a bounded diagnostic while usage collection continues', () => {
+  const x = menuBridgeFixture({ brokenMenu: true });
+  try {
+    x.finish();
+    assert.deepEqual(x.writes.at(-1).updateMenuHealth, { status: 'unavailable', patchedCount: 0, reason: 'initialization-failed' });
+    assert.equal(x.writes.at(-1).updateMenuEntries, 0);
+    assert.equal(x.writes.at(-1).cycles, 1);
+    assert.equal(x.counts.unsafeReads, 0);
+    assert.equal(x.timers.filter(timer => !timer.cancelled).length, 1);
+    assert.match(x.warnings[0], /initialization-failed/);
+    assert.doesNotMatch(JSON.stringify(x.writes), /No such binding was linked/);
+  } finally { x.bridge.stop(); }
+  assert.equal(x.counts.stopped, 1); assert.equal(x.timers.filter(timer => !timer.cancelled).length, 0);
+});

@@ -34,5 +34,5 @@ Close the copy, edit the optional `usage` object in `.local/settings.json`, and 
 For example, `"hiddenProviders": ["claude"]` hides Claude. Hiding a provider only affects display; use the Setup switches to disable its connection.
 Hover a usage row to find its exact window ID. IDs are also available in the local `usage-cache.json` under `.local/copy/active/layer-data/tweak-data/local.sidebar-usage-demo/`. Do not share the whole `.local` directory.
 
-The panel keeps the last successful values on failure and marks delayed data. Reset deadlines do not turn old readings into an invented 0%.
+The panel keeps the last successful values on failure. A small rotating ring immediately after each affected row's label appears once the last successful reading is three collection intervals old (three minutes at the default interval). Every label column reserves the same space, so gauges and numeric columns stay aligned when the indicator appears or disappears. Brief failures do not add a warning; hover the row or indicator for the last successful check and error. There is no separate Delayed footer. Reset deadlines do not turn old readings into an invented 0%.
 Hover or focus the panel to reveal its refresh action. Manual refresh coalesces concurrent requests and still honors provider rate-limit backoff.

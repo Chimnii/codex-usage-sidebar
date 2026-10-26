@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replace the Delayed footer with small rotating rings immediately after row labels once three collection intervals pass without a successful reading; reserve space within each label column to keep gauges aligned, keep brief failures quiet and preserve the last values.
+- Fix Help-menu Store checks by reading only the required Electron APIs instead of eagerly loading unrelated Owl compatibility bindings; report menu initialization failure explicitly in diagnostics.
 - Add a README screenshot with personal chat titles and profile details redacted.
 - Allow setup while the Store original is running, warn at completion, and guard direct copy launches against a running original.
 - Enable Claude on new installations and show missing/expired credentials as Disconnected; preserve explicit disabled settings and previous successful values.

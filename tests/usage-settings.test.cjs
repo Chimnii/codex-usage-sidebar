@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { normalizeUsageSettings } = require('../collector/settings.cjs');
 const { collect, closeOwnedChild, failure, writeCache, readCache } = require('../collector/collector.cjs');
-const { visibleProviders, viewSettings, normalizeSnapshot, initialProviders } = require('../tweak/index.js');
+const { visibleProviders, viewSettings, normalizeSnapshot, initialProviders, isDelayed } = require('../tweak/index.js');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-usage-settings-'));
@@ -17,6 +17,23 @@ function fixture(t) {
     codexHome: root, userProfile: root, appData: root, localAppData: root, workDir: root, cachePath: path.join(root, 'cache.json') };
 }
 const rows = [{ id: 'week', label: '7일', usedPercent: 42, resetsAt: null }];
+
+test('delay marks wait for three collection intervals, including old caches without repeated renderer failures', () => {
+  const now = Date.parse('2026-10-27T00:10:00Z');
+  const provider = { id: 'codex', status: 'stale', checkedAt: now - 179999, windows: rows };
+  const defaults = viewSettings();
+  assert.equal(isDelayed(provider, now, defaults), false);
+  assert.equal(isDelayed({ ...provider, checkedAt: now - 180000 }, now, defaults), true);
+  assert.equal(isDelayed({ ...provider, status: 'ok', checkedAt: now - 180000 }, now, defaults), true, 'an old cached success still needs a mark');
+  assert.equal(isDelayed({ ...provider, checkedAt: now }, now, defaults), false, 'a fresh success removes the mark');
+  assert.equal(isDelayed({ ...provider, checkedAt: null }, now, defaults), true, 'unknown-age cached data cannot claim freshness');
+  assert.equal(isDelayed({ ...provider, windows: [] }, now, defaults), false);
+  for (const intervalSeconds of [30, 120, 3600]) {
+    const settings = viewSettings({ providers: { codex: { intervalSeconds } } });
+    assert.equal(isDelayed({ ...provider, checkedAt: now - intervalSeconds * 3000 + 1 }, now, settings), false);
+    assert.equal(isDelayed({ ...provider, checkedAt: now - intervalSeconds * 3000 }, now, settings), true);
+  }
+});
 
 test('usage settings are bounded, deduplicated and contain no executable or arbitrary config fields', () => {
   const s = normalizeUsageSettings({ language: 'fr', providerOrder: ['claude', 'claude', 'other'], hiddenProviders: ['antigravity', 'other'],

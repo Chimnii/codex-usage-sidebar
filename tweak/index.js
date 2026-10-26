@@ -85,9 +85,25 @@ const CSS = `
   display: flex; align-items: center; gap: 6px; min-width: 0; height: 20px;
 }
 [data-sidebar-usage-demo] .sud-label {
-  flex: 0 0 62px; min-width: 0; max-width: calc(100% - 116px);
+  display: inline-flex; align-items: center; flex: 0 0 70px; min-width: 0;
+  max-width: calc(100% - 116px); white-space: nowrap; opacity: .8;
+}
+[data-sidebar-usage-demo] .sud-label-text {
+  flex: 0 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; opacity: .8;
+}
+[data-sidebar-usage-demo] .sud-indicator-slot {
+  display: inline-flex; flex: 0 0 8px; width: 8px; height: 8px;
+  align-items: center; justify-content: center; margin-left: 3px;
+}
+[data-sidebar-usage-demo] .sud-delay {
+  display: block; width: 8px; height: 8px; border-radius: 50%;
+  border: 1.25px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor; animation: sud-delay-spin .9s linear infinite;
+}
+@keyframes sud-delay-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-usage-demo] .sud-delay { animation: none; }
 }
 [data-sidebar-usage-demo] .sud-value {
   flex: 0 0 38px; text-align: right; white-space: nowrap;
@@ -305,16 +321,39 @@ function providerTooltip(provider) {
     + (provider.nextAttemptAt ? `\n${tr('retry')}: ${formatTime(provider.nextAttemptAt)}` : '');
 }
 
-function makeRow(provider, window, now) {
+function delayThresholdMs(provider, settings) {
+  const configured = settings.providers[provider.id]?.intervalSeconds;
+  const interval = Number.isFinite(configured) ? Math.max(30, Math.min(3600, configured)) : 60;
+  return interval * 3000;
+}
+
+function isDelayed(provider, now, settings) {
+  if (!provider.windows.length) return false;
+  if (provider.checkedAt != null) return now - provider.checkedAt >= delayThresholdMs(provider, settings);
+  // Cached values with no trustworthy success time cannot be presented as fresh.
+  return provider.status === 'stale';
+}
+
+function delayMarker(tooltip) {
+  const marker = element('span', 'sud-delay');
+  marker.title = tooltip;
+  marker.setAttribute('role', 'img');
+  marker.setAttribute('aria-label', tooltip);
+  return marker;
+}
+
+function makeRow(provider, window, now, delayed) {
   const row = element("div", "sud-row");
   const percent = window ? Math.round(window.usedPercent * 10) / 10 : null;
   const displayLabel = window ? displayWindowLabel(provider, window) : provider.id === "antigravity" ? "Gemini" : provider.label;
   const sourceLabel = window ? window.label : provider.label;
   const resetsAt = window ? window.resetsAt : null;
   const tooltip = `${providerTooltip(provider)}\n${sourceLabel}${window ? `\nID: ${window.id}` : ''}${resetsAt !== null ? `\n${tr('reset')}: ${formatTime(resetsAt)}` : ""}`;
-  const label = element("span", "sud-label", displayLabel);
+  const label = element("span", "sud-label");
+  label.append(element('span', 'sud-label-text', displayLabel));
   label.title = tooltip;
   row.title = tooltip;
+  row.toggleAttribute('data-delayed', delayed);
   const track = element("div", "sud-track");
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", `${provider.label} ${displayLabel} ${tr('usage')}`);
@@ -331,6 +370,11 @@ function makeRow(provider, window, now) {
   }
   const reset = element("span", "sud-reset", formatRelativeTime(resetsAt, now));
   reset.title = tooltip;
+  // Keep the spinner beside the actual text within a fixed label column.
+  // Its reserved slot prevents status changes from moving any column.
+  const indicator = element('span', 'sud-indicator-slot');
+  if (delayed) indicator.append(delayMarker(providerTooltip({ ...provider, status: 'stale' })));
+  label.append(indicator);
   row.append(label, track, element("span", "sud-value", percent !== null ? `${percent}%` : "—"), reset);
   return row;
 }
@@ -352,15 +396,16 @@ function renderProviders(panel, providers, now = Date.now(), settings = viewSett
     section.dataset.status = provider.status;
     section.setAttribute("aria-label", provider.label);
     section.title = providerTooltip(provider);
-    if (!provider.windows.length) section.append(makeRow(provider, null, now));
+    const delayed = isDelayed(provider, now, settings);
+    if (!provider.windows.length) section.append(makeRow(provider, null, now, delayed));
     // Three rows keep distinct Antigravity Gemini buckets visible by default.
-    for (const window of provider.windows.slice(0, 3)) section.append(makeRow(provider, window, now));
+    for (const window of provider.windows.slice(0, 3)) section.append(makeRow(provider, window, now, delayed));
     if (provider.windows.length > 3) {
       const details = element("details", "sud-more");
       details.dataset.provider = provider.id;
       details.open = expanded.has(provider.id);
       details.append(element("summary", "", language === 'ko' ? `추가 한도 ${provider.windows.length - 3}개` : `${provider.windows.length - 3} more limits`));
-      for (const window of provider.windows.slice(3)) details.append(makeRow(provider, window, now));
+      for (const window of provider.windows.slice(3)) details.append(makeRow(provider, window, now, delayed));
       section.append(details);
     }
     contents.append(section);
@@ -373,13 +418,12 @@ function renderProviders(panel, providers, now = Date.now(), settings = viewSett
     note.title = providerTooltip(provider);
     notes.append(note);
   }
-  const delayed = providers.filter(provider => provider.status === "stale");
   const unavailable = providers.filter(provider => provider.status === "unavailable");
-  const statusText = delayed.length ? tr('stale') : unavailable.length
+  const statusText = unavailable.length
     ? (unavailable.some(provider => provider.attemptedAt) ? tr('unavailable') : tr('waiting')) : "";
   if (statusText) {
     const status = element("span", "sud-status", statusText);
-    status.title = [...delayed, ...unavailable].map(providerTooltip).join("\n\n");
+    status.title = unavailable.map(providerTooltip).join("\n\n");
     notes.append(status);
   }
   if (notes.childNodes.length) contents.append(notes);
@@ -438,7 +482,7 @@ function start(api) {
   if (previous && previous.id === TWEAK_ID && typeof previous.stop === "function") previous.stop();
   const state = {
     stopped: false, reconcileTimer: null, mounts: new Map(), observer: null, style: null,
-    timer: null, inFlight: false, providers: initialProviders(), renderedMinute: Math.floor(Date.now() / 60000),
+    timer: null, inFlight: false, providers: initialProviders(), renderedMinute: Math.floor(Date.now() / 60000), nextDelayAt: Infinity,
     diagnosticsEnabled: false, lastReportAt: 0, reportsRemaining: 3, settings: viewSettings(), pending: new Set(), manual: false,
     lastResumeAt: 0
   };
@@ -524,6 +568,8 @@ function start(api) {
     const now = Date.now();
     for (const mount of state.mounts.values()) renderProviders(mount.panel, state.providers, now, state.settings);
     state.renderedMinute = Math.floor(now / 60000);
+    state.nextDelayAt = Math.min(Infinity, ...state.providers.filter(p => p.windows.length && p.checkedAt != null)
+      .map(p => p.checkedAt + delayThresholdMs(p, state.settings)).filter(deadline => deadline > now));
   }
   function failedConnection() {
     state.providers = state.providers.map(p => p.disabled || p.status === 'disconnected' ? p : ({ ...p,
@@ -563,8 +609,7 @@ function start(api) {
       // A reachable bridge can itself be stuck. Keep old percentages while
       // marking readings older than the configured polling allowance.
       for (const provider of normalized) {
-        const interval = Math.max(30, Math.min(3600, settings.providers[provider.id]?.intervalSeconds || 60));
-        if (provider.status === 'ok' && provider.checkedAt && Date.now() - provider.checkedAt > Math.max(180000, interval * 3000)) {
+        if (provider.status === 'ok' && isDelayed(provider, Date.now(), settings)) {
           provider.status = 'stale'; provider.errorCode = 'STALE_DATA';
         }
       }
@@ -579,7 +624,7 @@ function start(api) {
       if (!state.stopped) {
         const now = Date.now();
         const minute = Math.floor(now / 60000);
-        if (changed || minute !== state.renderedMinute) {
+        if (changed || minute !== state.renderedMinute || now >= state.nextDelayAt) {
           paint();
         }
         reportUi(now);
@@ -665,4 +710,4 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, hasVisibleRecoveryAlert, normalizeSnapshot, initialProviders, displayWindowLabel, createUpdateUi, viewSettings, visibleProviders, boundedInvoke };
+module.exports = { start, stop, hasVisibleRecoveryAlert, normalizeSnapshot, initialProviders, displayWindowLabel, createUpdateUi, viewSettings, visibleProviders, boundedInvoke, isDelayed };
